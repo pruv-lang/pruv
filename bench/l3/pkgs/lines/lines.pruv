@@ -26,7 +26,8 @@ pub fn jsonl_next(data: [u8], offset: i64, is_final: bool) -> JsonlStep
   return JsonlStep::Done;
 }
 
-pub fn parse_range(data: [u8], lo: i64, hi: i64) -> crate::json::JsonParse ! alloc
+// Hand `parse(&data[lo..hi])`: the document borrows data[lo..hi) (no copy), the scanned tape is moved in.
+pub fn parse_range(data: [u8], lo: i64, hi: i64) -> crate::json::JsonParse from(data) ! alloc
   requires 0 <= lo && lo <= hi && hi <= len(data)
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= hi - lo)
   ensures hi - lo > 16777216 ==> is_variant(result, crate::json::JsonParse::Failed)
@@ -38,30 +39,10 @@ pub fn parse_range(data: [u8], lo: i64, hi: i64) -> crate::json::JsonParse ! all
   if n > crate::json::limit_input_bytes() {
     return crate::json::JsonParse::Failed(crate::json::make_error(0, crate::json::err_input_too_large()));
   }
-  // hand parse(&data[lo..hi]) borrows the range; the owned document takes one exact copy (B-LLVM), as parse_copy.
-  let owned: [u8] = copy(subview(data, lo, hi));
-  return parse_owned(move owned, n);
-}
-
-// DB55 (G-DB54-1): parse_range(data, 0, hi) for a caller that gives up its buffer: no copy of the bytes; the document's
-// source is data shortened to hi (in place on both backends) and the scanned tape is moved in.
-pub fn parse_owned(take data: [u8], hi: i64) -> crate::json::JsonParse ! alloc
-  requires 0 <= hi && hi <= len(data)
-  ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= hi)
-  ensures hi > 16777216 ==> is_variant(result, crate::json::JsonParse::Failed)
-  ensures hi > 16777216 ==> (variant_field(result, crate::json::JsonParse::Failed, error).position == 0 && variant_field(result, crate::json::JsonParse::Failed, error).kind == 1)
-  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
-  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_strings(variant_field(result, crate::json::JsonParse::Parsed, document))
-{
-  let n: i64 = hi;
-  if n > crate::json::limit_input_bytes() {
-    return crate::json::JsonParse::Failed(crate::json::make_error(0, crate::json::err_input_too_large()));
-  }
-  // an owned local, so the truncate in the returned document shortens it in place (Rust and LLVM)
-  let owned: [u8] = move data;
-  let invalid: i64 = crate::lex::validate_utf8(owned, 0, n);
+  let view: ref [u8] = subview(data, lo, hi);
+  let invalid: i64 = crate::lex::validate_utf8(view, 0, n);
   if invalid >= 0 { return crate::json::JsonParse::Failed(crate::json::make_error(invalid, 4)); }
-  let checked: crate::parse::Checked = crate::parse::scan(subview(owned, 0, n));
+  let checked: crate::parse::Checked = crate::parse::scan(view);
   match checked {
     crate::parse::Checked::Rejected(position, kind) => {
       return crate::json::JsonParse::Failed(crate::json::make_error(position, kind));
@@ -71,33 +52,17 @@ pub fn parse_owned(take data: [u8], hi: i64) -> crate::json::JsonParse ! alloc
       // check_subtrees checked, and lines callers need no count fact, so the tape is published with no check.
       reveal crate::parse::contained;
       reveal crate::parse::tree_ok;
-      return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: truncate(owned, n), tape: move tape });
+      return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: view, tape: move tape });
     }
   }
 }
 
-// DB59 (G-DB58-1): parse_range for a caller that keeps and reuses its buffer (a line buffer): data[lo..hi) is copied
-// once into an exact-size block (one allocate-and-fill, no zeroed buffer and byte loop) that parse_owned moves into
-// the document. Same results as parse_range.
-pub fn parse_copy(data: [u8], lo: i64, hi: i64) -> crate::json::JsonParse ! alloc
-  requires 0 <= lo && lo <= hi && hi <= len(data)
-  ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= hi - lo)
-  ensures hi - lo > 16777216 ==> is_variant(result, crate::json::JsonParse::Failed)
-  ensures hi - lo > 16777216 ==> (variant_field(result, crate::json::JsonParse::Failed, error).position == 0 && variant_field(result, crate::json::JsonParse::Failed, error).kind == 1)
-  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
-  ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_strings(variant_field(result, crate::json::JsonParse::Parsed, document))
-{
-  let n: i64 = hi - lo;
-  if n > crate::json::limit_input_bytes() {
-    return crate::json::JsonParse::Failed(crate::json::make_error(0, crate::json::err_input_too_large()));
-  }
-  let owned: [u8] = copy(subview(data, lo, hi));
-  return parse_owned(move owned, n);
-}
+// 4.4zh-DB: parse_owned (take the buffer) and parse_copy (copy a reused line buffer) are gone. The document borrows
+// its input, so every caller keeps its buffer and calls parse_range, as the hand calls `parse(&line[lo..hi])`.
 
-// The owned document of a span that parse::scan_into accepted (grok read): the span bytes copied once, the tape prefix in an exact-size array.
-// Failed (0, 18) when the tape does not pass check_tape, as parse_range does.
-pub fn build_span(data: [u8], lo: i64, hi: i64, tape: [i64], records: i64) -> crate::json::JsonParse ! alloc
+// The document of a span that parse::scan_into accepted (grok read): it borrows data[lo..hi), the tape prefix is
+// copied into an exact-size array. Failed (0, 18) when the tape does not pass check_tape, as parse_range does.
+pub fn build_span(data: [u8], lo: i64, hi: i64, tape: [i64], records: i64) -> crate::json::JsonParse from(data) ! alloc
   requires 0 <= lo && lo <= hi && hi <= len(data) && hi - lo <= 16777216
   requires 0 <= records && records <= 1048576 && 6 * records <= len(tape)
   requires forall t in 0..records: ((tape[6 * t] == 4 || tape[6 * t] == 7) ==> utf8_valid_span(data, lo + tape[6 * t + 1] + 1, lo + tape[6 * t + 2] - 1))
@@ -105,13 +70,13 @@ pub fn build_span(data: [u8], lo: i64, hi: i64, tape: [i64], records: i64) -> cr
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_strings(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
-  // Hand: Document { source: data[lo..hi].to_vec(), tape: tape[..m].to_vec() }. Both are one exact copy (R-6g6-2).
+  // Hand: Document { source: &data[lo..hi], tape: tape[..m].to_vec() }. The tape is one exact copy (R-6g6-2).
   let n: i64 = hi - lo;
   let m: i64 = 6 * records;
-  let source: [u8] = copy(subview(data, lo, hi));
+  let source: ref [u8] = subview(data, lo, hi);
   let exact: [i64] = copy(subview(tape, 0, m));
   if !crate::json::check_tape(exact, n) { return crate::json::JsonParse::Failed(crate::json::make_error(0, 18)); }
-  return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: move source, tape: move exact });
+  return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: source, tape: move exact });
 }
 
 // -1 denotes negative input or an unrepresentable absolute offset.

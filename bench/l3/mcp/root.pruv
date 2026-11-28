@@ -113,11 +113,9 @@ pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! 
       if n == -4 { p[2]=6; p[3]=st.exit; } if n == -5 { p[2]=7; }
       done=true;
     } else if n >= 0 && n <= len(line) {
-      // The trimmed line is parsed from its bounds in the line buffer: one exact-size copy for the document source.
+      // The trimmed line is parsed from its bounds in the line buffer; the document borrows that range (4.4zh-DB).
       let t: crate::util::Bounds = crate::util::trim_span(line,0,n);
-      let parsed: crate::json::JsonParse = crate::lines::parse_copy(line,t.lo,t.hi);
-      // The document owns its copy: the line is cleared for the next one (capacity kept).
-      line=truncate(line,0);
+      let parsed: crate::json::JsonParse = crate::lines::parse_range(line,t.lo,t.hi);
       match parsed {
         crate::json::JsonParse::Failed(e) => { }
         crate::json::JsonParse::Parsed(d) => {
@@ -159,6 +157,7 @@ pub fn mcp_check(command: str, argv: str, cwd: str, timeout_ms: i64) -> [i64] ! 
           }
         }
       }
+      line=truncate(line,0); // the line is cleared for the next one after the match (capacity kept)
     }
   }
   if !done { p[2]=9; }

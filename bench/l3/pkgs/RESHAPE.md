@@ -280,11 +280,11 @@ already the hand shape.
 | A9 | `boolean`, `number` | `raw_output`: `parse::<i64>` within ±(2^53-1), `-0` kept | `i64`, `Number` | borrowed | digits | none | **=** Callers: `codex/rpc.pruv:416`, `grok/rpc.pruv:668`, `grok/summary.pruv:154` |
 | A10 | `string_text_owned`, `string_text_scanned_owned` | `String::from_utf8` of the decoded bytes | `Text` | result owns | decode | one | **=** |
 | L0 | `jsonl_next(data, offset, is_final)` | `split_inclusive(b'\n')` + `strip_suffix(b"\n")`/`b"\r"` | `JsonlStep` | borrowed | scan to newline | none | **=** Caller: `claude/framing.pruv:28` |
-| L1 | `parse_range(data, lo, hi)` | `parse(&data[lo..hi])`, borrowed `Document` | `JsonParse` | document owns a copy of the range | UTF-8 check + scan (in `parse_owned`) | one exact copy of the range, the tape | **changed in 2.3**: was a zeroed `alloc(n, 0)`, a byte loop, a scan, then a second `copy(owned)`; now `copy(subview(data, lo, hi))` moved into `parse_owned` (as `parse_copy`). The remaining copy is **B-LLVM** (owned source on LLVM). Callers: `qwen/entry.pruv:12`, `grok/read.pruv:362` (fallback) |
-| L2 | `parse_owned(take data, hi)` | `parse(&data)` on an owned buffer | `JsonParse` | takes the buffer; `truncate` in place | UTF-8 check + scan | the tape | **=** Caller: `grok/rpc.pruv:628` |
-| L3 | `parse_copy(data, lo, hi)` | `parse(&line[lo..hi])` | `JsonParse` | one exact copy | as L2 | copy + tape | **B-LLVM** (copy kept for the owned source). Callers: `codex/rpc.pruv:82`, `mcp/root.pruv:118` |
+| L1 | `parse_range(data, lo, hi)` | `parse(&data[lo..hi])`, borrowed `Document` | `JsonParse` | document owns a copy of the range | UTF-8 check + scan (in `parse_owned`) | one exact copy of the range, the tape | **changed in 2.3**: was a zeroed `alloc(n, 0)`, a byte loop, a scan, then a second `copy(owned)`; now `copy(subview(data, lo, hi))` moved into `parse_owned` (as `parse_copy`). The remaining copy is **B-LLVM** (owned source on LLVM). Callers: `qwen/entry.pruv:12`, `grok/read.pruv:362` (fallback). **=** since 4.4zh-DB: the document borrows `subview(data, lo, hi)` and moves the tape, no copy. Callers now also `codex/rpc.pruv`, `mcp/root.pruv`, `json/q_root.pruv`, `mcp/perf` |
+| L2 | `parse_owned(take data, hi)` | `parse(&data)` on an owned buffer | `JsonParse` | takes the buffer; `truncate` in place | UTF-8 check + scan | the tape | **=** Caller: `grok/rpc.pruv:628`. Removed in 4.4zh-DB (a borrowing document cannot borrow a taken buffer; no caller was left) |
+| L3 | `parse_copy(data, lo, hi)` | `parse(&line[lo..hi])` | `JsonParse` | one exact copy | as L2 | copy + tape | **B-LLVM** (copy kept for the owned source). Callers: `codex/rpc.pruv:82`, `mcp/root.pruv:118`. Removed in 4.4zh-DB: both callers call `parse_range` on their line buffer and clear it after the match |
 | L4 | `scan_span`, `parse_span` | none (hand parses each line into a fresh `Document`) | caller scratch `inout tape`, `inout stack` | `inout` | scan | none in the scan | **=** (step 2.9): `scan_span` / `parse_span` removed; qwen `window_wire` parses each line with `entry::parse_line` (a fresh document per line, as the hand). grok never called them (its tape path is `build_span` after `parse::scan_into`, a P8 row). |
-| L5 | `build_span(data, lo, hi, tape, records)` | `Document { source: data[lo..hi].to_vec(), tape: tape[..m].to_vec() }` | `JsonDocument` | result owns both | tape prefix: element loop | source: one exact copy (=); tape: one exact copy (2.5) | **changed in 2.3**: the result took `copy(source)` and `copy(exact)` of locals it owned; now both are moved. **changed in 2.5**: the tape prefix is `copy(subview(tape, 0, m))` (ZP closed by LB7, R-6g6-2), Rust `tape[..m].to_vec()`. = Callers: `grok/read.pruv:360`, `parse_span` |
+| L5 | `build_span(data, lo, hi, tape, records)` | `Document { source: data[lo..hi].to_vec(), tape: tape[..m].to_vec() }` | `JsonDocument` | result owns both | tape prefix: element loop | source: one exact copy (=); tape: one exact copy (2.5) | **changed in 2.3**: the result took `copy(source)` and `copy(exact)` of locals it owned; now both are moved. **changed in 2.5**: the tape prefix is `copy(subview(tape, 0, m))` (ZP closed by LB7, R-6g6-2), Rust `tape[..m].to_vec()`. = Callers: `grok/read.pruv:360`, `parse_span`. 4.4zh-DB: the source borrows `subview(data, lo, hi)` (hand `&data[lo..hi]`), the tape prefix copy stays; no caller left |
 | L6 | `absolute_offset(base, start, position)` | `base.checked_add(start)?.checked_add(position)` | `i64` | — | none | none | **=** |
 
 Status count: = 9 rows (A0, A1, A5, A7, A9, A10, L0, L2, L6) plus the ASCII path of A3 and the source half of L5;
@@ -1671,7 +1671,7 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
     window 1.006 / 0.696 in 7 rounds and 0.999 / 0.698 in 15 rounds (RSS 0.999 / 1.004). tools/perf_gate.py: 35
     failing cells of 144 (27 after L-gaps 29); every one except that long_text time cell is an RSS cell 1.002-1.029x
     (one or two 16 KiB pages), and no other M/L time cell is above hand.
-- 4.4zh-DB: open. Switch `pkgs/json` `JsonDocument.source` to `ref [u8]` (with `JsonParse` and claude `Line` as
+- 4.4zh-DB: closed in P11-db. Switch `pkgs/json` `JsonDocument.source` to `ref [u8]` (with `JsonParse` and claude `Line` as
   borrowing enums under R-6g9-17) across `pkgs/parse`, `pkgs/access`, `pkgs/lines` and the benches that use them.
   Needs: `lines::parse_owned(take data)` cannot return a borrow of its own buffer; codex / mcp truncate the line
   buffer before the match; `access::plain_str` takes `from(doc)`; the `lib/` copies have their own declarations.
@@ -1681,6 +1681,18 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
     need found: `parse::failure(p, k)` builds a `Failed` result with no borrowed input, and a borrowing-enum result needs
     a nonempty `from` list (`type/borrow_signature`; hand: `fn failure<'a>(..) -> JsonParse<'a>`). Open as 4.4zh-FL.
     The switch itself is not done in P11-zh (time cap).
+  - Done: (P11-db) `JsonDocument.source` is `ref [u8]`; `JsonParse` and claude / qwen `Line` are borrowing enums.
+    `parse::parse` / `parse_counted` / `scan_document` and `lines::parse_range` / `build_span` return `from(input)` /
+    `from(data)` and build the document on the borrowed range (no source copy; `parse_range` lost its byte-copy loop);
+    `parse::failure` and `json::parse_failed` use `from()`. `lines::parse_owned` and `parse_copy` are removed: codex
+    `rpc::parse_line` and mcp call `parse_range` on the caller's line buffer and clear it after the match.
+    `access::plain_str` returns `from(doc)`. The `lib/` copies of json / parse / lines match (no root compiles them;
+    checked with a temp root and `--lib`). Two gaps left with the smallest change: `access::fields` is fixed to the
+    one caller's 13 keys (4.4zh-CG) and json `a2_root::parse_tape` copies the tape once (4.4zh-NB). Structure table
+    `work/p11db/structure.md` (local). Measured (load < 6, interleaved with hand, 7 runs): claude `window` long_text
+    rs/rust 0.978x, rs/llvm 0.684x, window_8MiB 0.717x / 0.710x; json `a4_root` query chain 1/10/100 M 0.900-0.926x,
+    L 0.920-0.930x, allocs and RSS 1.000x. claude rs/llvm peak RSS is +32 KiB on every op including head/tail (no data
+    work), the fixed share of 4.4zf-RS, so `tools/perf_gate.py` still flags those six L cells.
 - 4.4zh-VB: Vec part closed in P11-zh (SPEC R-6g9-18, tests `tests/spec/r6g9_18_*`). A local `let mut v: vec<B> =
   vec_new::<B>()` of a borrowing struct `B` (not an enum) and a read `vec<B>` param are allowed: the list only grows by
   `v = vec_push(move v, move b)` (b a whole borrowing binder), `len(v)`, `vec_get(v, i)` as a direct argument of a
@@ -1703,8 +1715,13 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   generic or lifetime parameter list (`fn parse<'a>(..)`, every fn that returns a borrow) is never evaluated: it keeps
   the generator's `#[inline]` and is not a call-graph node. SPEC R-7-3 now states this; raising such fns like any
   other changes the output of every borrowing bench (claude, qwen) and needs its own measured bundle.
-- 4.4zh-NB: language gap, open, no target needs it yet. Nested borrowing enums, borrowing enums inside structs, and
+- 4.4zh-NB: language gap, open. Nested borrowing enums, borrowing enums inside structs, and
   partial moves (`move d.tape`) out of a borrowing enum binder (R-6g9-17 rejects them).
+  - Needed since 4.4zh-DB by `json/a2_root.pruv::parse_tape` (hand returns `parser.tape`): `move document.tape` and
+    a `take d: JsonDocument` helper are `type/borrow_signature`, so the tape is copied once (`copy(document.tape)`).
+- 4.4zh-CG: language gap, open (found in P11-db). A generic fn cannot take a borrowing struct (R-6g-11,
+  `type/borrow_signature`), so `access::fields<const N>(doc, id, keys: [str; N])` (hand `fields<const N: usize>`) is
+  fixed at its one caller's 13 keys (`claude/entry.pruv::root_keys`); the body is unchanged.
 - 4.4zh-IP: open (found by the L-gaps 30 audit, older than 4.4zg-CS). R-7-3 does not describe two parts of
   `pruvc-rs/crates/pruv-core/src/inline_policy.rs`: explicitly pinned `#[inline]` fns are left out of the call graph
   used for the recursion check (line 48), and a `__pruv_fp` twin counts its adapter's call sites (line 156). Either

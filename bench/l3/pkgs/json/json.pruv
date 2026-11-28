@@ -53,7 +53,7 @@ pub struct JsonError { position: i64, kind: i64 }
 // (SPEC "Struct invariants (LG16)"): proof-only, proved where a document is handed over (parse::parse and the
 // pkgs/lines builders ensure them on the Parsed payload), assumed for every JsonDocument parameter.
 pub struct JsonDocument {
-  source: [u8], tape: [i64],
+  source: ref [u8], tape: [i64],
   invariant len(tape) % 6 == 0 && len(tape) >= 6 && len(tape) <= 6291456 && len(source) <= 16777216,
   invariant forall t in 0..len(tape) / 6: (0 <= tape[6 * t] && tape[6 * t] <= 7),
   invariant forall t in 0..len(tape) / 6: (0 <= tape[6 * t + 1] && tape[6 * t + 1] < tape[6 * t + 2] && tape[6 * t + 2] <= len(source)),
@@ -103,14 +103,14 @@ pub fn make_error(position: i64, kind: i64) -> JsonError
   return JsonError { position: position, kind: kind };
 }
 
-pub fn parse_failed(position: i64, kind: i64) -> JsonParse
+pub fn parse_failed(position: i64, kind: i64) -> JsonParse from()
   ensures is_variant(result, JsonParse::Failed)
 {
   return JsonParse::Failed(JsonError { position: position, kind: kind });
 }
 
 // Ownership boundary (R03L, R-6e-12): parse::scan_document builds the JsonDocument itself. The finished tape local
-// moves into the field (no copy); the source is borrowed by parse, so it is copied once (handing it over is R03 C).
+// moves into the field (no copy); 4.4zh-DB: the document borrows the source (`ref [u8]`, hand `&'a [u8]`), no copy.
 // The old wrap_document copied both buffers and is gone.
 
 // ---- structural publication check ----
