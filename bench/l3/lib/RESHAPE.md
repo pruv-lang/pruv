@@ -2804,3 +2804,30 @@ B (codegen, Claude opus high), required and open (bundle time cap reached, no fi
   std panic instead); the deque `vec_push` checked helper skips the prefix ensures; `record_pkg_catalog` keys
   `Vec<S>` and `VecDeque<S>` the same (effect not checked).
 B also found the plain `Vec<S>` LLVM IR byte-identical to the base commit over 72 programs.
+
+## L-gaps 22: LLVM `vec_pop_front` on a nested place (4.4h-VD review B), G-DB33-1/2 attempt (4.4l-CT)
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4h-VD review B | codegen, closed | LLVM `native_vec_match` takes the pop place with `inout_place_ptr(&place.expr)` (as `vec_clear` does) instead of spilling the evaluated value, so a pop on `inout o.w.q` (local or inout parameter, two or more fields deep) writes the new head and length into the real place. The `r6e_25_deque_window` LLVM output hash changes for this reason; Rust output is unchanged | runtime `r6e_25_deque_nested` (both backends, verified and `--no-verify`): pop, push back, `vec_at_mut` and `vec_clear` on `o.w.drafts`, `vec_at_mut` on `o.w.items` / `o.w.ids`, and a deep copy of the holder that pops on its own ring; claude test_a0..a4 |
+| 4.4l-CT (G-DB33-1/2) | proof gap, open (time) | Attempt on side branch `lair/pruv-l-gaps-22-row2-wip` (7df89c86), not merged; `lines::parse_owned` still runs `json::check_subtrees`. Taken from the L-gaps 21 direction: one `set_header` writes the three header fields and proves `tree_ok(id..)` (asserts give the count frame over the stores and the container-record facts); `child` wraps `record` with the count step split into `q < id` (unchanged) and `id` (+1); `member` is one `container` loop step (key, `:`, value) whose ensures are the invariant step. Cause of the L-gaps 21 `tree_ok` failure: `count(k: parent == t)` inside a `forall t` is an aggregate with one more parameter than the plain `count(k: parent == id)`, and `agg_frame` only linked aggregates of equal arity, so the instance `t = id` never met the plain term. Verifier change on the side branch: when a plain aggregate's body is a parameterized one's body at ground values `c` (no bound variable), `agg_frame` adds `forall x, y: G(x, y) == F(x, y, c)`. Result: three fresh-cache runs pass (33.6 / 34.0 / 33.9 s), and a no-op `assert` in `set_header`, `member` or `container` keeps them passing; the `set_header` asserts are needed (without them its `tree_ok` postcondition fails). Not merged because a5_root verify is 30-34 s fresh and 13.6 s warm against 7.3 s / 1.6 s on the same machine: the new obligations first run in stage 0 (no lemmas), fail at the limit, and failed attempts are not cached | — |
+
+Next direction for 4.4l-CT: cut the stage-0 time, either by fewer step obligations (fold the `member` and
+`set_header` asserts into helper ensures that already prove at stage 1) or by a verifier rule that starts an
+obligation whose goal reads an aggregate at the stage that adds the aggregate lemmas (a policy change: needs a
+decision and a spec review). The arity link in `agg_frame` is the part to keep.
+
+4.4zc-PA stays out (no-unsafe).
+
+- Checks on this branch (row 1 only; the verifier change is on the side branch, so no spec review A was run):
+  `--only runtime --backend both` 3617/3617; `--only must_reject` 1423/1423; `--only l3_frontend` 96/96;
+  `--only g8_frontend --backend both` 39/39; `cargo test --release` passed; `diff_rust --fuzz-count 20` and
+  `m3_all --quick` ok after the golden update (new `r6e_25_deque_nested` keys, the `r6e_25_deque_window` LLVM
+  hash from the fix, mutate samples shifted by the new runtime file: without the file `diff_parse` has no
+  mismatch); `--list-rows` diff (4 new rows, `tests/run_all_rows.txt` updated).
+- L3: claude a0-a4 on rs/rust and rs/llvm. No lib/pkgs module changed on this branch.
+- Review B fix-check (Claude opus high, that finding only): fixed, no required item. `inout_place_ptr` reaches the real storage for every place the checker
+  admits (local or inout `Var` slot, field chain, boxed field, `vec_at_mut` binder), and the value is read once
+  before the stores. Optional, not done: a pop rooted at a `vec_at_mut` binder and a pop through a boxed middle field
+  have no test (code path read as right).
+- Measured (row 2, side branch): `work/lgaps22/perf_cells.json`.
