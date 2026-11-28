@@ -1,0 +1,36 @@
+// spec: R-6g9-17 accept
+// 4.4zh-FL: a borrowing-enum result with an empty from() list holds no loans (Rust `fn failure<'a>(..) -> Parse<'a>`).
+struct Doc { source: ref [u8], tape: [i64], invariant len(tape) == 1 && tape[0] == 9 }
+enum Parse { Parsed(d: Doc), Failed(code: i64) }
+fn failure(k: i64) -> Parse from()
+  ensures is_variant(result, Parse::Failed)
+{
+  return Parse::Failed(k);
+}
+fn document(data: [u8]) -> Doc from(data) ! alloc
+  requires len(data) >= 2
+{
+  let t: [i64] = alloc(1, 9);
+  return Doc { source: subview(data, 1, len(data)), tape: move t };
+}
+fn parse(data: [u8]) -> Parse from(data) ! alloc {
+  if len(data) < 2 { return failure(len(data) + 5); }
+  let d: Doc = document(data);
+  return Parse::Parsed(move d);
+}
+fn read(p: Parse) -> i64
+  ensures 0 <= result && result <= 59
+{
+  match p {
+    Parse::Parsed(d) => { if len(d.source) > 50 { return 0; } return len(d.source) + d.tape[0]; }
+    Parse::Failed(k) => { if k < 0 || k > 9 { return 0; } return k; }
+  }
+}
+pub fn checksum() -> i64 ! alloc {
+  let data: [u8] = alloc(2, 7);
+  let short: [u8] = alloc(1, 7);
+  let a: Parse = parse(data);
+  let b: Parse = parse(short);
+  let c: Parse = failure(3);
+  return read(a) * 100 + read(b) * 10 + read(c);
+}

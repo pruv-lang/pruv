@@ -1692,9 +1692,13 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   a nested `Vec<Vec<B>>`, an inout / take / field `vec<B>`, binding `vec_get(v, i)` to a let, and a `vec<B>` result
   stay rejected (`type/borrow_signature`, `type/foreign_owned_type`, `type/borrow_escape`). No current target needs
   them after DB.
-- 4.4zh-FL: language gap, open (found in P11-zh). A borrowing-enum result with no borrowed input (a free lifetime, hand
+- 4.4zh-FL: language gap, closed (found in P11-zh, closed in P11-zi). A borrowing-enum result with no borrowed input (a free lifetime, hand
   `fn failure<'a>(p: i64, k: i64) -> JsonParse<'a>`) cannot be declared: an empty or missing `from` list is
   `type/borrow_signature`. Needed by `pkgs/parse::failure` and `json::parse_failed` for 4.4zh-DB.
+  - Done: (P11-zi, SPEC R-6g9-17) a borrowing-enum result may declare an empty `from()`; it holds no loans, so a
+    return that holds a loan is `type/borrow_escape` and a call of it holds none (Rust `fn failure<'a>(k: i64) ->
+    Parse<'a>`). A missing `from`, and `from()` on a borrowing struct or `ref` result, stay `type/borrow_signature`.
+    Tests `tests/spec/r6g9_17_free_result` (runs on both backends), `_free_escape`, `_free_struct`.
 - 4.4zh-IL: open (found by the P11-zh audit). `inline_policy.rs` reads a fn header only as `fn name(`, so a fn with a
   generic or lifetime parameter list (`fn parse<'a>(..)`, every fn that returns a borrow) is never evaluated: it keeps
   the generator's `#[inline]` and is not a call-graph node. SPEC R-7-3 now states this; raising such fns like any

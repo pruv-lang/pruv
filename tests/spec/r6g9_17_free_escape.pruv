@@ -1,0 +1,12 @@
+// spec: R-6g9-17 reject
+// 4.4zh-FL: a result with an empty from() list cannot return a borrowed payload.
+struct Doc { source: ref [u8], tape: [i64] }
+enum Parse { Parsed(d: Doc), Failed(code: i64) }
+fn document(data: [u8]) -> Doc from(data) ! alloc {
+  let t: [i64] = alloc(1, 9);
+  return Doc { source: subview(data, 0, len(data)), tape: move t };
+}
+fn bad(data: [u8]) -> Parse from() ! alloc {
+  let d: Doc = document(data);
+  return Parse::Parsed(move d);
+}

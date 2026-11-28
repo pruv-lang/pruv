@@ -1,0 +1,6 @@
+fn check(take l: Loop, a: i64) -> Loop ! async, net, proc, alloc
+  requires ev_ok(l)
+  requires 0 <= a && a < ev_cap(l)
+  requires ev_kind(l, a) == 2
+  ensures ev_ok(result)
+{ return ev_remove(move l, a); }

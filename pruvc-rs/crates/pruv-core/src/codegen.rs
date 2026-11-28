@@ -6604,6 +6604,11 @@ pruv_hi <= (pruv_b.len() as i128) && \
                 } else if self.verified && self.body_named.contains(&name) {
                     name.push_str("__pruv_body"); // the caller proved the requires (T0: or passes the length guard)
                 }
+                let base = name.split("::<").next().unwrap_or("").to_string();
+                if !base.contains("::") && (self.vars.contains_key(&base) || self.bound.contains(&base)) {
+                    // HC-3: a parameter or local named like the callee shadows the fn item in Rust
+                    name.insert_str(0, "self::");
+                }
                 let call = format!("{}({})", name, args.join(", "));
                 Ok(if captured.is_empty() { call } else { format!("{{ {} {} }}", captured.join(" "), call) })
             }

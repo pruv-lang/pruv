@@ -1,0 +1,6 @@
+// HC-3: a parameter named like a called fn (`bump`) must not capture the call; Rust calls `self::bump()`.
+fn bump() -> i64 { return 7; }
+fn g(bump: i64) -> i64
+  requires 0 <= bump && bump < 100
+{ return bump() + bump; }
+fn run() -> () ! io { print(g(3)); }
