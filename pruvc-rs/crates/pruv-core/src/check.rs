@@ -2648,7 +2648,7 @@ impl Checker {
     }
 
     fn borrowed_type_argument(&self, ty: &GType) -> bool {
-        ty.name == "@ref" || self.decls.get(&ty.name).is_some_and(crate::borrowed::borrowing_struct)
+        ty.name == "@ref" || self.decls.get(&ty.name).is_some_and(crate::borrowed::borrowing_decl)
             || ty.args.iter().any(|t| self.borrowed_type_argument(t))
     }
 
@@ -4335,6 +4335,10 @@ impl Checker {
         }
         self.check_borrow(m.line, m.col, &m.name, &m.fields)?;
         let source = self.lookup(m.line, m.col, &m.name, scope, &m.fields)?;
+        // R-6g9-17: a borrowing payload binder moves only whole, before the view / read-parameter rules below
+        if self.record_binders.contains(&m.name) && self.decls.get(&source.ty.name).is_some_and(crate::borrowed::borrowing_struct) {
+            return Err(terr(m.line, m.col, "borrow_signature", "a borrowing payload must move whole", ""));
+        }
         if self.ref_path(&source.ty, &m.fields) {
             return Err(terr(m.line, m.col, "array_alias", "a borrowed view cannot be moved", ""));
         }
@@ -5219,7 +5223,7 @@ impl Checker {
                         "bind the value before the group, e.g. `let n: i64 = len(a);`, and pass n"));
                 }
                 let t = expr_ty(arg).as_ref().map(|k| GType::from_key(k));
-                if t.as_ref().and_then(|t| self.decls.get(&t.name)).is_some_and(crate::borrowed::borrowing_struct) {
+                if t.as_ref().and_then(|t| self.decls.get(&t.name)).is_some_and(crate::borrowed::borrowing_decl) {
                     return Err(terr(arg.line(), arg.col(), "borrow_signature", "borrowed values cannot cross a par branch boundary", ""));
                 }
                 if !t.as_ref().map_or(false, |t| self.par_type_ok(t)) {
@@ -7026,6 +7030,9 @@ impl Checker {
                 }
                 if !x.fields.is_empty() {
                     let mut ty = self.lookup(x.line, x.col, &x.name, scope, &x.fields)?.ty;
+                    if self.record_binders.contains(&x.name) && self.decls.get(&ty.name).is_some_and(crate::borrowed::borrowing_struct) {
+                        return Err(terr(x.line, x.col, "borrow_signature", "a borrowing payload must move whole", ""));
+                    }
                     for field in &x.fields {
                         if !self.is_struct(&ty) {
                             return Err(field_move_error(x));
@@ -7693,7 +7700,7 @@ impl Checker {
             return t.args.iter().all(|a| self.value_branch_kind(a) == Some(false)).then_some(false);
         }
         match self.decls.get(&t.name) {
-            Some(d) if !crate::borrowed::borrowing_struct(d)
+            Some(d) if !crate::borrowed::borrowing_decl(d)
                 && t.args.iter().all(|a| self.value_branch_kind(a) == Some(false)) => Some(false),
             _ => None,
         }

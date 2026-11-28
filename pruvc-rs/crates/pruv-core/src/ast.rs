@@ -476,7 +476,7 @@ pub struct StructDecl { pub line: i64, pub col: i64, pub name: String, pub field
     pub invariants: Vec<Expr>,
     pub invariant_lines: Vec<i64> }
 #[derive(Debug, Clone, PartialEq)]
-pub struct EnumDecl { pub line: i64, pub col: i64, pub name: String, pub variants: Vec<VariantDecl>, pub tparams: Vec<TParam> }
+pub struct EnumDecl { pub borrowing: bool, pub line: i64, pub col: i64, pub name: String, pub variants: Vec<VariantDecl>, pub tparams: Vec<TParam> }
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldInit { pub line: i64, pub col: i64, pub name: String, pub value: Expr }
 #[derive(Debug, Clone, PartialEq)]

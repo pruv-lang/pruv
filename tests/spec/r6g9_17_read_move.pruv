@@ -1,0 +1,6 @@
+// spec: R-6g9-17 reject
+struct Doc { source: ref [u8], tape: [i64] }
+enum E { Hit(code: i64, doc: Doc), Skip }
+fn bad(e: E) -> E from(e) {
+  match e { E::Hit(k, d) => { return E::Hit(k, move d); } E::Skip => { return E::Skip; } }
+}

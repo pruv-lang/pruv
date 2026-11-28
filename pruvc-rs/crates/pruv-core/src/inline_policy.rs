@@ -1,11 +1,11 @@
-// Inline policy (SPEC "Inline policy"; Python `inline_policy`): a pass over the finished Rust text, so the Python and Rust
-// compilers decide the same way by construction. A non-recursive `#[inline]` fn (one that cannot reach itself through
-// calls) gets `#[inline(always)]` when its inclusive size (own body lines plus, once per call, the inclusive size of
-// each callee that gets always) is at most INLINE_SMALL, when it has exactly one call site, or when it has two or more and
-// the copies it adds beyond one, incl * (call sites - 1), fit INLINE_BUDGET. A fn with zero call sites (a host entry
-// called only from the harness closures) is not promoted by the call-site rules, so it gets always only at
-// incl <= INLINE_SMALL. The rest keep `#[inline]` and rustc's own heuristics.
-use crate::shared_tables::inline_policy::{INLINE_BUDGET, INLINE_SMALL}; // shared with pruvc (pruvc/data/inline_policy.json, tools/gen_shared.py)
+// Inline policy (SPEC R-7-3; the frozen Python `inline_policy` keeps the older budget rule): a pass over the finished
+// Rust text. A non-recursive `#[inline]` fn (one that cannot reach itself through calls) gets `#[inline(always)]` when
+// its inclusive size (own body lines plus, once per call, the inclusive size of each callee that gets always) is at most
+// INLINE_SMALL, or when it has exactly one call site. A fn with two or more call sites and a larger inclusive size keeps
+// `#[inline]` and rustc's heuristics: forcing extra copies of it grew the claude a4 runner's `__text` by 87 KB
+// (4.4zg-CS) with no time gain. A fn with zero call sites (a host entry called only from the harness closures) is not
+// promoted by the call-site rule, so it gets always only at incl <= INLINE_SMALL. The rest keep `#[inline]`.
+use crate::shared_tables::inline_policy::INLINE_SMALL; // shared with pruvc (pruvc/data/inline_policy.json, tools/gen_shared.py)
 use std::collections::{BTreeMap, HashMap};
 
 // Private codegen markers consumed before the Rust text is returned.
@@ -158,7 +158,7 @@ pub(crate) fn inline_policy(text: String) -> String {
                     _ => nm,
                 };
                 let calls = index.get(nm).and_then(|k| sites.get(k)).copied().unwrap_or(0);
-                always[v] = tot <= INLINE_SMALL || calls == 1 || (calls >= 2 && tot.saturating_mul(calls - 1) <= INLINE_BUDGET);
+                always[v] = tot <= INLINE_SMALL || calls == 1;
             }
         }
     }
@@ -218,14 +218,14 @@ mod tests {
         assert!(inline_policy(lone).contains("#[inline(always)]\nfn f__pruv_fp("), "no triple, own sites");
     }
 
-    /// Spec thresholds, not the JSON values, so a wrong pruvc/data/inline_policy.json is caught
-    /// (tests/check_generated.py has the same pairs for the Python compiler).
+    /// Spec thresholds, not the JSON values, so a wrong pruvc/data/inline_policy.json is caught.
+    /// (tests/check_generated.py checks the frozen Python compiler, which keeps the budget rule.)
     #[test]
     fn inline_policy_thresholds() {
         assert!(inline_case(8, 300), "INLINE_SMALL 8 accepts");
         assert!(!inline_case(9, 300), "9 lines reject");
-        assert!(inline_case(1500, 2), "INLINE_BUDGET 1500 accepts");
-        assert!(!inline_case(1501, 2), "1501 rejects");
+        assert!(!inline_case(9, 2), "two sites, 9 lines keep #[inline] (no copy budget, 4.4zg-CS)");
+        assert!(!inline_case(1500, 2), "two sites, 1500 lines keep #[inline]");
         assert!(inline_case(8, 0), "0 sites, 8 lines accepts (INLINE_SMALL)");
         assert!(!inline_case(9, 0), "0 sites, 9 lines rejects (host entry)");
         assert!(inline_case(9, 1), "1 site still accepts");

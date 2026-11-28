@@ -1,6 +1,7 @@
 // spec: R-7-3 reject
-// Calling the same large pub fn from main does not promote its wrapper: the in-crate call goes to big_entry__pruv_body,
-// so the wrapper still has zero call sites and keeps #[inline], and the body (two sites) gets always.
+// Calling the same large pub fn from main does not promote its body: the in-crate call goes to big_entry__pruv_body,
+// which then has two sites and 18 lines, so it keeps #[inline] (no copy budget, 4.4zg-CS). The wrapper has zero call
+// sites; its inclusive size is its own short body, so it gets always through INLINE_SMALL only.
 pub fn big_entry(x: i64) -> i64
   requires 0 <= x
 {

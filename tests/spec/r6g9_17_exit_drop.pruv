@@ -1,0 +1,32 @@
+// spec: R-6g9-17 accept
+struct Doc { source: ref [u8], tape: [i64] }
+enum E { Hit(code: i64, doc: Doc), Skip }
+fn make(data: [u8]) -> E from(data) ! alloc {
+  let tape: [i64] = alloc(1, 9);
+  let doc: Doc = Doc { source: data, tape: move tape };
+  return E::Hit(3, move doc);
+}
+fn fail() -> Result<(), i64> { return Err::<(), i64>(8); }
+fn exits(mode: i64) -> Result<i64, i64> ! alloc {
+  let mut data: [u8] = alloc(1, 7);
+  for i in 0..2 {
+    let e: E = make(data);
+    if mode == 0 { return Ok::<i64, i64>(0); }
+    if mode == 1 { break; }
+    if mode == 2 { continue; }
+    if mode == 3 { fail()?; }
+    match e {
+      E::Hit(k, d) => { let n: i64 = len(d.source); data = truncate(data, 0); }
+      E::Skip => {}
+    }
+  }
+  return Ok::<i64, i64>(1);
+}
+pub fn checksum() -> i64 ! alloc {
+  let mut n: i64 = 0;
+  for i in 0..5 {
+    let r: Result<i64, i64> = exits(i);
+    match r { Ok(k) => { if k == 1 { n = i; } } Err(k) => { if k != 8 { return -1; } } }
+  }
+  return n;
+}

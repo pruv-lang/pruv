@@ -1257,7 +1257,9 @@ fn enum_union_words(tt: &TypeTable, abi_types: &HashSet<String>) -> HashMap<Stri
         let mut fields_bound = |fields: &[FieldDecl], variant| {
             let mut sum: (usize, usize) = (0, 0);
             for f in fields {
-                let b = if tt.g9_boxed.contains(&fld_label(d.name(), variant, &f.name)) {
+                let b = if f.borrowed {
+                    (2, 16)
+                } else if tt.g9_boxed.contains(&fld_label(d.name(), variant, &f.name)) {
                     (1, 8)
                 } else {
                     bound(tt, abi_types, bounds, unions, &f.ty)?
@@ -2246,7 +2248,7 @@ impl<'a> FnGen<'a> {
 
     pub fn new_slot(&mut self, name: &str, ty: &str) -> R<Slot> {
         let kind = vkind(ty);
-        if self.tt.decl(ty).is_some_and(crate::borrowed::borrowing_struct) {
+        if self.tt.decl(ty).is_some_and(crate::borrowed::borrowing_decl) {
             self.views = true; // R-6g9-2: a borrowing struct local reads its source array like a `ref` local
         }
         let base = format!("%l{}.{}", self.nslot, mangle(name));

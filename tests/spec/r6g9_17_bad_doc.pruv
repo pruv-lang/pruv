@@ -1,0 +1,8 @@
+// spec: R-6g9-2 R-6g9-17 reject
+struct Doc { source: ref [u8], tape: [i64], invariant len(tape) == 1 && tape[0] == 9 }
+enum Line { Object(doc: Doc), Skip }
+fn wrong(data: [u8]) -> Line from(data) ! alloc {
+  let tape: [i64] = alloc(1, 8);
+  let doc: Doc = Doc { source: data, tape: move tape };
+  return Line::Object(move doc);
+}

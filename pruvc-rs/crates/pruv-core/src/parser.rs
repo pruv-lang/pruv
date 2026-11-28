@@ -2314,7 +2314,7 @@ impl Parser {
         }
         self.expect("}")?;
         self.scope = HashMap::new();
-        Ok(EnumDecl { line: kw.line, col: kw.col, name: n.val, variants, tparams })
+        Ok(EnumDecl { borrowing: false, line: kw.line, col: kw.col, name: n.val, variants, tparams })
     }
 
     /// A type in a position where refinement annotations are not allowed (fields, etc.)
