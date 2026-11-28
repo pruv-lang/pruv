@@ -1984,7 +1984,7 @@ runtime|tests/runtime/g9_r26_ctor_payload_select.pruv	1 case: obl=6 1	default=80
 runtime|tests/runtime/g9_r27_ctor_copy_budget.pruv	1 case: obl=3 1	default=b93268667e48
 runtime|tests/runtime/g9_r28_ctor_scalar_select.pruv	1 case: obl=5 1	default=95520858ac25
 runtime|tests/runtime/g9_r29_ret_move_position.pruv	1 case: obl=35 1	default=e404e9786170
-runtime|tests/runtime/hc2_rt_sorted_fixed.pruv	1 case: obl=6 1	default=198fd8f46f9c
+runtime|tests/runtime/hc2_rt_sorted_fixed.pruv	1 case: obl=8 1	default=96991fc1a587
 runtime|tests/runtime/hc3_rt_param_shadow.pruv	1 case: obl=2 1	default=ef0a48a95990
 runtime|tests/runtime/kd_m6_small_result.pruv	1 case: obl=103 1	default=9d301f2c26dd
 runtime|tests/runtime/kd_m6_small_result_foreign.pruv	1 case: obl=21 1	default=e191d28a5326

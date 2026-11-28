@@ -1692,7 +1692,7 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   a nested `Vec<Vec<B>>`, an inout / take / field `vec<B>`, binding `vec_get(v, i)` to a let, and a `vec<B>` result
   stay rejected (`type/borrow_signature`, `type/foreign_owned_type`, `type/borrow_escape`). No current target needs
   them after DB.
-- 4.4zh-FL: language gap, open (found in P11-zh). A borrowing-enum result with no borrowed input (a free lifetime, hand
+- 4.4zh-FL: language gap, closed (found in P11-zh, closed in P11-zi). A borrowing-enum result with no borrowed input (a free lifetime, hand
   `fn failure<'a>(p: i64, k: i64) -> JsonParse<'a>`) cannot be declared: an empty or missing `from` list is
   `type/borrow_signature`. Needed by `pkgs/parse::failure` and `json::parse_failed` for 4.4zh-DB.
   - Done: (P11-zi, SPEC R-6g9-17) a borrowing-enum result may declare an empty `from()`; it holds no loans, so a

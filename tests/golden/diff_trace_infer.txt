@@ -1983,7 +1983,7 @@ runtime|tests/runtime/g9_r26_ctor_payload_select.pruv	1 case: obl=6 1	--infer=32
 runtime|tests/runtime/g9_r27_ctor_copy_budget.pruv	1 case: obl=3 1	--infer=40b8917d4c40
 runtime|tests/runtime/g9_r28_ctor_scalar_select.pruv	1 case: obl=5 1	--infer=14708520f84a
 runtime|tests/runtime/g9_r29_ret_move_position.pruv	1 case: obl=35 1	--infer=a725d14c4229
-runtime|tests/runtime/hc2_rt_sorted_fixed.pruv	1 case: obl=6 1	--infer=ff75cb50898b
+runtime|tests/runtime/hc2_rt_sorted_fixed.pruv	1 case: obl=8 1	--infer=ec17497485d8
 runtime|tests/runtime/hc3_rt_param_shadow.pruv	1 case: obl=2 1	--infer=848b4d59ccb6
 runtime|tests/runtime/kd_m6_small_result.pruv	1 case: obl=119 1	--infer=2ec2e4af4a1f
 runtime|tests/runtime/kd_m6_small_result_foreign.pruv	1 case: obl=25 1	--infer=8ffd0d0b0f55

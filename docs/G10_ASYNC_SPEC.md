@@ -291,10 +291,11 @@ Reaping failure is code 8: the slot is freed anyway, `ev_exit(result) == 0`, and
 
 | Operation | Effect | Contract / meaning |
 |---|---|---|
-| `ev_remove(take l: Loop, slot: i64) -> Loop` | `async, net, proc, alloc` | requires P, slot ok, `kind(l,slot) != 0`. Cancellation: ends the slot's resource (socket close; listener close; process kill and wait; timer drop), joins the slot's threads, frees the slot. Ensures, when `kind(l,slot) != 2`, O; for a listener slot `ok(result) || ev_error(result) == 2` (the wake-up connect of §5.6 failed). Ensures B when `ok(result)`, N, `kind(result,slot) == 0`, `!eof(result,slot)`, `!open(result,slot)`, `cnt(result) == cnt(l) - 1`, F({slot}) |
+| `ev_remove(take l: Loop, slot: i64) -> Loop` | `async, net, proc, alloc` | requires P, slot ok, `kind(l,slot) != 0`. Cancellation: ends the slot's resource (socket close; listener close; process kill and wait; timer drop), joins the slot's threads (a listener whose wake-up connect fails is detached instead, §5.6), frees the slot. Ensures, when `kind(l,slot) != 2`, O; for a listener slot `ok(result) || ev_error(result) == 2` (the wake-up connect of §5.6 failed). Ensures B when `ok(result)`, N, `kind(result,slot) == 0`, `!eof(result,slot)`, `!open(result,slot)`, `cnt(result) == cnt(l) - 1`, F({slot}) |
 
-A removed slot's queued data is discarded. Removing the slot named by the last event leaves the event values as
-they are (B): they are a report of the last wait, not a live view. Removing a process slot that is still
+A removed slot's queued data is discarded. When `ok(result)`, removing the slot named by the last event leaves the event
+values as they are (B): they are a report of the last wait, not a live view. A failed listener wake-up fails the
+loop, which clears the event (`last == -1`, event slot `-1`, kind `0`, empty buffer). Removing a process slot that is still
 running kills it; this differs from `ev_proc_wait`, which waits for it.
 
 #### Public buffer and observers
@@ -337,7 +338,7 @@ Loop-level (`ev_error`, these fail the whole loop):
 |---|---|
 | `0` | no failure |
 | `1` | bad input: an argument outside its requires reached the runtime (only possible with `--foreign-checks off`; the runtime's representation defense, not a normal path) |
-| `2` | internal failure: a worker thread could not be spawned, a descriptor could not be duplicated, or the read timeout of an added socket could not be cleared |
+| `2` | internal failure: a worker thread could not be spawned, a descriptor could not be duplicated, the read timeout of an added socket could not be cleared, or the wake-up connect of a removed listener failed (§5.6) |
 
 Slot-level (never change `ev_ok`; they mark the slot, are published as event kind 5 once, and are remembered for
 the `Err` of `ev_close`):
@@ -502,7 +503,8 @@ pub fn echo_two(port: i64) -> i64 ! async, net, proc, alloc
 ```
 
 Every path ends the loop with `ev_close`, which closes the remaining client sockets and the listener. `ev_wait`
-keeps `ev_ok`, so the loop guard is only needed after `ev_accept`, which can fail the loop. Because the
+keeps `ev_ok`, so the loop guard is only needed after `ev_accept` and the listener `ev_remove`, which can fail
+the loop. Because the
 operations name which slots change, the verifier knows the listener stays kind 2 while a client is echoed or
 removed. A client slot is removed once its end of stream arrives; a client that never sends again and never
 closes is bounded by the 5 s idle timeout and `rounds`, which are not wall-clock proofs. The echo may block in

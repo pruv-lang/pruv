@@ -3785,7 +3785,7 @@ mutate|tests/runtime/g9_r26_ctor_payload_select.pruv	6 cases: ok 3, error parse/
 mutate|tests/runtime/g9_r27_ctor_copy_budget.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=3c28e546ec3c	1/parse=53a9834ad96a	2/parse=7c20d033d5e5	3/parse=0c4875da70b9	4/parse=086d041cc212	5/parse=3b97b6b5beec
 mutate|tests/runtime/g9_r28_ctor_scalar_select.pruv	6 cases: ok 4, error parse/syntax 2	0/parse=0a56c69a6fe2	1/parse=7bbbbe5bce67	2/parse=f4b98396923e	3/parse=0a56c69a6fe2	4/parse=6c0a7862736a	5/parse=0a56c69a6fe2
 mutate|tests/runtime/g9_r29_ret_move_position.pruv	6 cases: error parse/syntax 5, ok 1	0/parse=480d75b4b161	1/parse=0e09b74140ad	2/parse=a7e86dc6b31b	3/parse=787bf4423b21	4/parse=b859e16f2c44	5/parse=6fef10fe3999
-mutate|tests/runtime/hc2_rt_sorted_fixed.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=11456877b3b9	1/parse=ee2352f9fd2c	2/parse=9edfc5ba7da2	3/parse=5fed37c376a4	4/parse=1a09c9b0b05a	5/parse=fcbd4fa771e2
+mutate|tests/runtime/hc2_rt_sorted_fixed.pruv	6 cases: error parse/syntax 3, ok 3	0/parse=47287fa06f5a	1/parse=ee2352f9fd2c	2/parse=55c46d5635df	3/parse=5fed37c376a4	4/parse=5fed37c376a4	5/parse=d3ef3f6a29ec
 mutate|tests/runtime/hc3_rt_param_shadow.pruv	6 cases: error parse/syntax 3, error parse/bad_char 2, ok 1	0/parse=276eb77a315c	1/parse=5bf5d179ae72	2/parse=ee2352f9fd2c	3/parse=97f0df654780	4/parse=f720afaa2ff8	5/parse=1687025b4e09
 mutate|tests/runtime/kd_m6_small_result.pruv	6 cases: error parse/syntax 6	0/parse=3c16bb7d9f0c	1/parse=0dfc042be438	2/parse=25fbb17a1263	3/parse=426502ded191	4/parse=e9a4f0e43b72	5/parse=40a4b8f76764
 mutate|tests/runtime/kd_m6_small_result_foreign.pruv	6 cases: error parse/syntax 4, ok 2	0/parse=d2a0d1fd299d	1/parse=e9e46bcaaa15	2/parse=0276c4385250	3/parse=fddc308c2b06	4/parse=5551156c5ee4	5/parse=10f6ddc0641c
@@ -4383,7 +4383,7 @@ runtime|tests/runtime/g9_r26_ctor_payload_select.pruv	1 case: ok 1	parse=fc1628d
 runtime|tests/runtime/g9_r27_ctor_copy_budget.pruv	1 case: ok 1	parse=0c4875da70b9
 runtime|tests/runtime/g9_r28_ctor_scalar_select.pruv	1 case: ok 1	parse=0a56c69a6fe2
 runtime|tests/runtime/g9_r29_ret_move_position.pruv	1 case: ok 1	parse=c9cd56f9141e
-runtime|tests/runtime/hc2_rt_sorted_fixed.pruv	1 case: ok 1	parse=fcbd4fa771e2
+runtime|tests/runtime/hc2_rt_sorted_fixed.pruv	1 case: ok 1	parse=3b63e23b3d3e
 runtime|tests/runtime/hc3_rt_param_shadow.pruv	1 case: ok 1	parse=5bc00db01fd1
 runtime|tests/runtime/kd_m6_small_result.pruv	1 case: ok 1	parse=de76ab261d9b
 runtime|tests/runtime/kd_m6_small_result_foreign.pruv	1 case: ok 1	parse=0276c4385250

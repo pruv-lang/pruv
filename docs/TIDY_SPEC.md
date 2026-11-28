@@ -368,7 +368,7 @@ by byte-identical output and run by group, with the full test suite once before 
       generated code records error 2 when the wake fails (`tests/g10_async/proof/ev_remove.pruv:4`,
       `pruv-proof/src/symbolic.rs:5065`, `pruv-core/src/codegen.rs:8336`, `docs/G10_ASYNC_SPEC.md:891`).
       Needs a reject twin (listener) next to the timer accept case. Done: (P11-zi) the symbolic `ev_remove` of a
-      listener slot allows `ev_error(result) == 2` (other kinds keep `ok`), G10_ASYNC_SPEC §3/`ev_remove` row say so,
+      listener slot allows `ev_error(result) == 2` (other kinds keep `ok`), G10_ASYNC_SPEC §2.3 (O and the `ev_remove` row) say so,
       and `tests/must_reject/g10a_v_remove_listener_ok.pruv` (listener) rejects `ensures ev_ok(result)`.
     - HC-2 wrong LLVM IR: a fixed array `[i64; 2]` with the sortedness `requires` (SPEC 3177/3770) emits
       `icmp slt i64 %t1, None` in safe mode (`pruv-core/src/llvmgen.rs:1538,7591,8550`). Done: (P11-zi) the

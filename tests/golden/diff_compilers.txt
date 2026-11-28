@@ -2624,7 +2624,7 @@ runtime|runtime/g9_r27_ctor_copy_budget [--no-verify]	2 cases: exit 2	llvm=567c3
 runtime|runtime/g9_r28_ctor_scalar_select [--no-verify]	2 cases: exit 2	llvm=93b02689052e	rust=fc898b467fac
 runtime|runtime/g9_r28_ctor_scalar_select [default]	2 cases: exit 2	llvm=791ef66bd621	rust=af22c6702b3b
 runtime|runtime/g9_r29_ret_move_position [--no-verify]	2 cases: exit 2	llvm=b7372f5406ed	rust=e828af5deb90
-runtime|runtime/hc2_rt_sorted_fixed [--no-verify]	2 cases: exit 2	llvm=cbddb6c9b135	rust=7c9a8cf091a7
+runtime|runtime/hc2_rt_sorted_fixed [--no-verify]	2 cases: exit 2	llvm=e984040f43d6	rust=1d7632dc1541
 runtime|runtime/hc3_rt_param_shadow	2 cases: exit 2	llvm=51942948dcf7	rust=4552a64eabec
 runtime|runtime/kd_m6_small_result [default]	2 cases: exit 2	llvm=c7adc2da8c61	rust=c7ccabbf3dd0
 runtime|runtime/kd_m6_small_result_foreign [default]	2 cases: exit 2	llvm=1c28e9bdba3a	rust=785e78a0cb98

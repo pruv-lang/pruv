@@ -3967,7 +3967,7 @@ mutate|tests/runtime/g9_r26_ctor_payload_select.pruv	6 cases: error parse/syntax
 mutate|tests/runtime/g9_r27_ctor_copy_budget.pruv	6 cases: error parse/syntax 4, ok 2	0/check=3c28e546ec3c	1/check=53a9834ad96a	2/check=7c20d033d5e5	3/check=4a5b2a5acaa3	4/check=086d041cc212	5/check=63528b73d527
 mutate|tests/runtime/g9_r28_ctor_scalar_select.pruv	6 cases: ok 3, error parse/syntax 2, error type/unknown_fn 1	0/check=595ac2305520	1/check=7bbbbe5bce67	2/check=754c6b020ebe	3/check=595ac2305520	4/check=6c0a7862736a	5/check=595ac2305520
 mutate|tests/runtime/g9_r29_ret_move_position.pruv	6 cases: error parse/syntax 5, ok 1	0/check=480d75b4b161	1/check=0e09b74140ad	2/check=f30c60871bb6	3/check=787bf4423b21	4/check=b859e16f2c44	5/check=6fef10fe3999
-mutate|tests/runtime/hc2_rt_sorted_fixed.pruv	6 cases: error parse/syntax 4, ok 2	0/check=11456877b3b9	1/check=fd914019f86a	2/check=9edfc5ba7da2	3/check=5fed37c376a4	4/check=1a09c9b0b05a	5/check=997ab7484484
+mutate|tests/runtime/hc2_rt_sorted_fixed.pruv	6 cases: error parse/syntax 3, ok 2, error type/contract_only 1	0/check=f5282f837dd6	1/check=fd914019f86a	2/check=55c46d5635df	3/check=5fed37c376a4	4/check=5fed37c376a4	5/check=5cf243099bd8
 mutate|tests/runtime/hc3_rt_param_shadow.pruv	6 cases: error parse/syntax 3, error parse/bad_char 2, ok 1	0/check=276eb77a315c	1/check=5bf5d179ae72	2/check=fd914019f86a	3/check=97f0df654780	4/check=f720afaa2ff8	5/check=1687025b4e09
 mutate|tests/runtime/kd_m6_small_result.pruv	6 cases: error parse/syntax 6	0/check=3c16bb7d9f0c	1/check=0dfc042be438	2/check=25fbb17a1263	3/check=426502ded191	4/check=e9a4f0e43b72	5/check=40a4b8f76764
 mutate|tests/runtime/kd_m6_small_result_foreign.pruv	6 cases: error parse/syntax 4, error type/unknown_fn 1, ok 1	0/check=d2a0d1fd299d	1/check=e9e46bcaaa15	2/check=c3ea548f4edf	3/check=85f033f175a6	4/check=5551156c5ee4	5/check=10f6ddc0641c
@@ -4565,7 +4565,7 @@ runtime|tests/runtime/g9_r26_ctor_payload_select.pruv	1 case: ok 1	check=db5f157
 runtime|tests/runtime/g9_r27_ctor_copy_budget.pruv	1 case: ok 1	check=4a5b2a5acaa3
 runtime|tests/runtime/g9_r28_ctor_scalar_select.pruv	1 case: ok 1	check=595ac2305520
 runtime|tests/runtime/g9_r29_ret_move_position.pruv	1 case: ok 1	check=a48cc9c2cc26
-runtime|tests/runtime/hc2_rt_sorted_fixed.pruv	1 case: ok 1	check=997ab7484484
+runtime|tests/runtime/hc2_rt_sorted_fixed.pruv	1 case: ok 1	check=8bb68ca0284b
 runtime|tests/runtime/hc3_rt_param_shadow.pruv	1 case: ok 1	check=7e7747d29194
 runtime|tests/runtime/kd_m6_small_result.pruv	1 case: ok 1	check=cb6d1c8e6f05
 runtime|tests/runtime/kd_m6_small_result_foreign.pruv	1 case: ok 1	check=c3ea548f4edf
