@@ -3989,7 +3989,14 @@ follows this rule:
   each call to another fn that gets `#[inline(always)]`, that fn's `incl`. Calls to fns that keep `#[inline]` add
   nothing.
 - Call sites are counted textually over the whole output: a fn name followed by `(`, not after `.` and not in its own
-  `fn name(` header.
+  `fn name(` header. The by-value twin `f__pruv_fp` of the fixed-prefix form (`--proven-entries`, section 7) has one
+  textual call site, its adapter `f`; when the generated triple `f`, `f__pruv_fp`, `f__pruv_fpb` is present, the twin
+  is counted by the call sites of `f` instead (a user fn whose name merely ends in `__pruv_fp` is counted as itself).
+- The call graph has a node only for each fn whose hint the pass evaluates (an automatic `#[inline]` fn or an
+  explicit `#[inline(always)]` fn, see below). A fn emitted without a hint, an explicit `#[inline]` fn and a
+  `#[cold]` fn are not nodes: calls to
+  them add nothing, and a cycle that passes through one of them is not seen, so a fn on such a cycle is judged as
+  non-recursive and may get `#[inline(always)]` (rustc then inlines it where it can, as for any fn).
 - A non-recursive fn gets `#[inline(always)]` when `incl <= 8` or when it has exactly one call site. A fn with two or
   more call sites and `incl > 8` keeps `#[inline]`. Why: the earlier rule also forced it when
   `incl * (call sites - 1) <= 1500` (the extra copies inlining adds); on the claude a4 runner those copies were

@@ -1683,3 +1683,7 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   `pruvc-rs/crates/pruv-core/src/inline_policy.rs`: explicitly pinned `#[inline]` fns are left out of the call graph
   used for the recursion check (line 48), and a `__pruv_fp` twin counts its adapter's call sites (line 156). Either
   the SPEC row or the code needs to change.
+  - Closed in P11-zh by the SPEC side (no output change): R-7-3 now states that the call graph has nodes only for the
+    fns whose hint the pass evaluates (an unhinted fn, an explicit `#[inline]` fn and a `#[cold]` fn are not nodes,
+    so a cycle through one is not seen), and that a `__pruv_fp` twin of a generated triple counts its base name's
+    call sites.
