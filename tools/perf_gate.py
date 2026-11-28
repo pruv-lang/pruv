@@ -7,7 +7,7 @@ Rule (user decision, not to be changed here): hand Rust 1.0x is the floor.
 Only data-proportional cells at representative sizes M and L gate: any such
 cell with pruv/hand > 1.0 is a failure (exit 1). Fixed-share cells and size S
 cells above 1.0 are debt, printed for docs/L3_RESTRUCTURE_SPEC.md §7.5 (exit 0).
-There is no noise tolerance band.
+There is no noise tolerance band. An input with no cells at all fails.
 
 perf_cells.json: a JSON list (or {"source": str, "cells": [...]}) of cells
   {"name": str, "axis": "time"|"rss"|"allocs", "size": "S"|"M"|"L",
@@ -59,6 +59,9 @@ def main(argv):
     except (OSError, ValueError) as e:
         print("ERROR %s" % e)
         return 2
+    if not cells:
+        print("VERDICT: FAIL (0 cells: nothing was measured)")
+        return 1
     fail, debt, ok = [], [], []
     for c in cells:
         r = ratio(c)

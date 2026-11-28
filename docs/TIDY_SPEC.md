@@ -360,4 +360,34 @@ by byte-identical output and run by group, with the full test suite once before 
     (exit 1 on a proportional M/L cell above hand 1.0x, debt list for the rest) with the `perf_cells.json`
     format and examples in `tools/testdata/`; described under T6 "Merge gates". No test rows changed.
 
+16. **Health check 2026-11-28 (TIDY 4.16).** Broad check and blind-spot review at a206043a. Fixed at once:
+    `tools/merge_check.py` now judges only `ci.yml` push runs and prints WAIT when the judged run is not for
+    main HEAD; `tools/perf_gate.py` fails an input with zero cells. Queued, one compiler bundle after P11-zh
+    (rows HC-1..HC-4, same compiler files, run one after another):
+    - HC-1 proof gap: `ev_remove` of a listener slot (kind 2) still proves `ensures ev_ok(result)` although the
+      generated code records error 2 when the wake fails (`tests/g10_async/proof/ev_remove.pruv:4`,
+      `pruv-proof/src/symbolic.rs:5065`, `pruv-core/src/codegen.rs:8336`, `docs/G10_ASYNC_SPEC.md:891`).
+      Needs a reject twin (listener) next to the timer accept case.
+    - HC-2 wrong LLVM IR: a fixed array `[i64; 2]` with the sortedness `requires` (SPEC 3177/3770) emits
+      `icmp slt i64 %t1, None` in safe mode (`pruv-core/src/llvmgen.rs:1538,7591,8550`).
+    - HC-3 Rust name capture: a parameter named like a called function (`bump: i64` and `bump()`) emits
+      `return bump();` on the parameter (`pruv-core/src/codegen.rs:6594`). Needs a rustc-built twin.
+    - HC-4 R-7-3 mismatch (also 4.4zh-IP, in P11-zh): explicit `#[inline]` cuts the recursion graph and
+      `__pruv_fp` uses the adapter's call count (`pruv-core/src/inline_policy.rs:48,156`).
+    Queued, tests/harness bundle (no compiler change, may run beside a compiler bundle):
+    - HC-5 `tests/golden.py:212` and `tests/diff_rust.py:280` skip stored keys that were not run this time;
+      `--quick` must fail on requested-but-missing `(seed, index)` keys.
+    - HC-6 `bench/l3/budget/m9_test/run_m9.py:395` returns known-difference for a whole record before the
+      event order and final state are compared; limit it to the number field.
+    - HC-7 `bench/l3/claude/entry.pruv:10` `parse_line` contract holds for an always-`Skip` body; add the
+      success condition for a plain user line and a mutant in `q_mutants.py` that must be rejected by it.
+    - HC-8 `.github/workflows/windows-abi.yml:7` path filter omits the compiler, so committed `.win.ll` can go
+      stale; run `tests/abi/winci/prepare.py --check` when ABI codegen changes.
+    - HC-9 `tests/spec_trace.py:57` does not fail on SPEC sections without any rule ID (10 of 42); add IDs or
+      an explicit exemption list for the example section.
+    Recorded, not queued yet: LLVM `par` per-thread 64 KiB block cache not returned at thread exit
+    (`pruvc/runtime.c:208`, `parallel_shim.rs:34`), measure under repeated `par` before a row; trusted
+    declarations 7 -> 42 in 14 days (26 in budget), counted at every broad check; uncalled
+    `g6_unimplemented_error` / `g9_unimplemented_error` / `take_array_abi_error` go to the next dead-code pass.
+
 Order after the review: T0①–⑥ → T3 → T1 → T2 → T4 → P16, P17a → T5 (inline policy) → T6.

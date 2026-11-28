@@ -4,8 +4,9 @@
 Usage: python3 tools/merge_check.py <branch>
 
 Run on the main checkout. Standard library only. Steps:
-  1. CI: the newest completed push run on main must not have failed
-     (schedule runs are printed, not judged).
+  1. CI: the newest completed push run of the ci.yml workflow on main must not
+     have failed (schedule runs are printed, not judged). If that run is not for
+     the current main HEAD (its own run is still going), a WAIT line says so.
   2. `git diff --stat main...<branch>` is printed.
   3. If the branch changes tests/: the row list is built from the branch tree
      (a temporary `git worktree`, the main checkout is not touched) with
@@ -42,8 +43,8 @@ def git(*args, cwd=None):
 
 def check_ci():
     p = subprocess.run(
-        ["gh", "run", "list", "--branch", "main", "--limit", "3",
-         "--json", "status,conclusion,event,displayTitle,databaseId,createdAt"],
+        ["gh", "run", "list", "--branch", "main", "--workflow", "ci.yml", "--limit", "5",
+         "--json", "status,conclusion,event,displayTitle,databaseId,createdAt,headSha"],
         capture_output=True, text=True)
     if p.returncode != 0:
         report("FAIL", "ci", "gh run list failed: %s" % p.stderr.strip())
@@ -55,9 +56,15 @@ def check_ci():
                                         r["displayTitle"][:60]))
     push = [r for r in runs if r["event"] == "push" and r["status"] == "completed"]
     if not push:
-        report("FAIL", "ci", "no completed push run on main in the last 3 runs")
+        report("FAIL", "ci", "no completed ci.yml push run on main in the last 5 runs")
         return
     newest = push[0]
+    head = git("rev-parse", "main").stdout.strip()
+    if newest.get("headSha") != head:
+        mine = [r for r in runs if r.get("headSha") == head]
+        state = mine[0]["status"] if mine else "not listed"
+        report("WAIT", "ci", "judged run %s is for %s, not main HEAD %s (its run: %s)"
+               % (newest["databaseId"], (newest.get("headSha") or "?")[:8], head[:8], state))
     sched = [r for r in runs if r["event"] == "schedule" and r["conclusion"] not in ("success", None)]
     note = ""
     if sched:
