@@ -413,6 +413,10 @@ by byte-identical output and run by group, with the full test suite once before 
       pairs disagree with the oracle on 2855 cases (shortest: input `""`, tape word 6 is 1, oracle 0), and the two
       py pairs fail with `KeyError 'py'` since the Python compiler was frozen. Find whether the oracle or the lane is
       wrong, fix it, and drop or mark the py pairs. Not in run_all or CI, so nothing else catches it.
+      Done: the oracle was stale. Since 4.4n (b594b7c8, merge eee0fa63, 4.4m-PB) `parse::parse` sets tape word 5 to
+      the plain bit (1 = no backslash) on kind 4/7 records, as `json::check_tape` allows; `run_q.py` still expected 0.
+      The oracle now expects the plain bit for strings and keys, and the py pairs run only with `--vs-py`
+      (`run_a3.COMPILER_SET`). rs/rust and rs/llvm: 20213 cases, 0 mismatches; rc 0.
     Recorded, not queued yet: LLVM `par` per-thread 64 KiB block cache not returned at thread exit
     (`pruvc/runtime.c:208`, `parallel_shim.rs:34`), measure under repeated `par` before a row; trusted
     declarations 7 -> 42 in 14 days (26 in budget), counted at every broad check; uncalled

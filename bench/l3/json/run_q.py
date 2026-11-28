@@ -181,7 +181,9 @@ def oracle(data, a4):
         stop = r+1
         while stop < len(tape) and tape[stop]['start'] < n['end']: stop += 1
         count = len(n['children']) if k in (5,6) else 0
-        expected += [k,s,e,stop,n['parent'],count,k if k != 7 else 4,0 if k == 7 else s,e-s if k == 7 else e]
+        # Tape word 5: child count for containers, plain bit (no backslash) for strings and keys (4.4m-PB).
+        word5 = count if k in (5,6) else int(k in (4,7) and b'\\' not in n['raw'])
+        expected += [k,s,e,stop,n['parent'],word5,k if k != 7 else 4,0 if k == 7 else s,e-s if k == 7 else e]
         assert data[s:e] == n['raw']
         if k in (4,7):
             u = a4.units(n['value']); t = a4.normalized(n['value'])
@@ -255,7 +257,8 @@ def main():
         result['jsonl_steps'] = len(linecases)
         payload = ''.join(f'd 0 1 {d.hex()}\n' for d in cases)
         payload += ''.join(f'l {o} {int(f)} {d.hex()}\n' for d,o,f,e,h in linecases)
-        for compiler in ('py','rs'):
+        # py pairs only with --vs-py: the Python compiler is frozen (PF).
+        for compiler in a4.a3.COMPILER_SET:
             for backend in ('rust','llvm'):
                 name = f'{compiler}/{backend}'; stats = dict(cases=0,accepted=0,rejected=0,policy_differences={},lossy_text_views=0,mismatches=0)
                 result['pairs'][name] = stats
