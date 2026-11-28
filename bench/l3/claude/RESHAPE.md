@@ -274,7 +274,7 @@ Language gaps met (no compiler change; closest shape kept):
 
 | row | kind | finding | closest shape used |
 |---|---|---|---|
-| 4.4h-VD | language | no `VecDeque` / `pop_front` / `push_back` on `Vec<S>` | `Vec<Draft>` with a front index `begun % 200`, reuse in place |
+| 4.4h-VD | language, closed in L-gaps 21 | no `VecDeque` / `pop_front` / `push_back` on `Vec<S>` | was `Vec<Draft>` with a front index `begun % 200`; now `VecDeque<Draft>` with `vec_pop_front` / `vec_push` like the hand |
 | 4.4h-FA | language | a `[u8]` field cannot be appended in place (`arr_append` needs a local `inout`); R-6e-16 move-out / restore with a `take` helper | `let r: [u8] = move d.reply; d.reply = piece(move r, ...)` |
 | 4.4h-TR | language | `truncate` takes no `move` argument; the clear goes through a local (`let x0 = move b; truncate(x0, 0)`). On LLVM a truncate that leaves more than half unused may shrink the block (LG33), so the reuse of evicted blocks is only certain on the Rust backend (not measured per allocation) | `refill` / `refill_text` |
 
@@ -465,3 +465,12 @@ Title and user content rows: 4.4m-TB, 4.4m-FB. See `pkgs/RESHAPE.md` §Step 4.4m
   carries stamp lengths.
 - 4.4h-VD stays open (see the L-gaps 20 section in `bench/l3/lib/RESHAPE.md`).
 - Tests (rs/rust and rs/llvm): test_a0..a4 272/2897/2443/134/270 passed. Not measured: 4.4h-VD is still open.
+
+### L-gaps 21 (4.4h-VD)
+
+- Closed 4.4h-VD: `Collector.drafts` is a `VecDeque<Draft>` (SPEC R-6e-25). `begin` with 200 drafts pops the front
+  (`vec_pop_front`), refills its prompt, truncates its reply, sets its fields and pushes it back (hand
+  `pop_front` / `clear` / `push_back`); below 200 it pushes a fresh draft. The current draft is `len(drafts) - 1`
+  (hand `back_mut`), and `plan` / `put_turns` read draft `j` from the back as `len(drafts) - 1 - j`; the front
+  index `begun % 200` is gone. `a3_root` keeps the oracle's slot number `(begun - 1) % 200`.
+- Tests (rs/rust and rs/llvm): test_a0..a4 272/2897/2443/134/270 passed. Not measured in this bundle.
