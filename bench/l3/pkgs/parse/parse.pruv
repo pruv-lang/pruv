@@ -18,15 +18,14 @@ fn utf8_width(byte: i64) -> i64
 }
 
 // D33: `crate::lex::scan_string` that also returns the plain bit (no escape), like the hand `self.string()?`
-// returning `Cow::Borrowed`. Used by `record` (4.4n, 4.4m-PB) and `token_at` (scan_into, P8).
+// returning `Cow::Borrowed`, for input not yet validated: `token_at` (scan_into, P8). `record` uses `string_token_valid`.
 // Non-ASCII bytes are validated in place.
 // An invalid sequence stops the token with error 4; parse then reports the first invalid byte.
 // Like the hand `Parser::string`, an error is returned once as `Fault { position, kind }` at the cursor.
 // The Ok value is the plain bit (no escape), which feeds `string_utf8_plain`.
 // start lets the contract relate the final cursor to its entry position.
-fn string_token(input: [u8], start: i64, end: i64, checked: bool, inout pos: i64) -> Result<bool, crate::lex::Fault>
+fn string_token(input: [u8], start: i64, end: i64, inout pos: i64) -> Result<bool, crate::lex::Fault>
   requires 0 <= start && start < end && end <= len(input) && pos == start && input[start] == 34
-  requires checked ==> utf8_valid_span(input, 0, len(input))
   ensures start <= pos && pos <= end
   ensures is_ok(result) ==> (start + 2 <= pos && utf8_valid_span(input, start + 1, pos - 1))
   ensures !is_ok(result) ==> (err_val(result).position == pos && 0 < err_val(result).kind && err_val(result).kind <= 17)
@@ -35,18 +34,13 @@ fn string_token(input: [u8], start: i64, end: i64, checked: bool, inout pos: i64
   let mut plain: bool = true;
   while pos < end
     invariant start < pos && pos <= end && end <= len(input)
-    invariant !checked ==> utf8_valid_span(input, start + 1, pos)
+    invariant utf8_valid_span(input, start + 1, pos)
     decreases end - pos
   {
     let c: i64 = input[pos];
     if c == 34 { pos = pos + 1; return Ok::<bool, crate::lex::Fault>(plain); }
     if c < 32 { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 16 }); }
-    if c >= 128 && checked {
-      // 4.4m-SS: the caller validated the whole input (hand `str::from_utf8(line)`), so a raw byte is skipped like
-      // the hand's `position(|b| matches!(b, b'"' | b'\\' | 0..=31))`; the span fact follows from the line fact
-      // because both quotes are ASCII (SPEC LG30).
-      pos = pos + 1;
-    } else if c >= 128 {
+    if c >= 128 {
       let scalar_end: i64 = pos + utf8_width(c);
       if scalar_end > end { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 4 }); }
       if crate::lex::validate_utf8(input, pos, scalar_end) >= 0 { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 4 }); }
@@ -64,7 +58,7 @@ fn string_token(input: [u8], start: i64, end: i64, checked: bool, inout pos: i64
           while k < 4
             invariant 0 <= k && k <= 4 && start < pos && pos <= end && end <= len(input)
             invariant pos >= hex_start
-            invariant !checked ==> utf8_valid_span(input, start + 1, pos)
+            invariant utf8_valid_span(input, start + 1, pos)
             decreases 4 - k
           {
             if pos == end { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
@@ -87,6 +81,66 @@ fn string_token(input: [u8], start: i64, end: i64, checked: bool, inout pos: i64
   return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 17 });
 }
 
+// 4.4zf-LT: `string_token` for input the caller validated as a whole (hand `str::from_utf8(line)`), the shape of
+// the hand `Parser::string`: the inner loop only looks for a quote, a backslash or a control byte (hand
+// `bytes().position(|b| matches!(b, b'"' | b'\\' | 0..=31))`), and an escape is checked after it stops. Raw bytes
+// >= 128 are skipped; the span fact follows from the line fact because both quotes are ASCII (SPEC LG30).
+fn string_token_valid(input: [u8], start: i64, end: i64, inout pos: i64) -> Result<bool, crate::lex::Fault>
+  requires 0 <= start && start < end && end <= len(input) && pos == start && input[start] == 34
+  requires utf8_valid_span(input, 0, len(input))
+  ensures start <= pos && pos <= end
+  ensures is_ok(result) ==> (start + 2 <= pos && utf8_valid_span(input, start + 1, pos - 1))
+  ensures !is_ok(result) ==> (err_val(result).position == pos && 0 < err_val(result).kind && err_val(result).kind <= 17)
+{
+  pos = pos + 1;
+  let mut plain: bool = true;
+  while pos < end
+    invariant start < pos && pos <= end && end <= len(input)
+    decreases end - pos
+  {
+    let mark: i64 = pos;
+    let mut c: i64 = input[pos];
+    while c != 34 && c != 92 && c >= 32
+      invariant start < pos && pos < end && end <= len(input) && c == input[pos] && pos >= mark
+      decreases end - pos
+    {
+      pos = pos + 1;
+      if pos == end { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 17 }); }
+      c = input[pos];
+    }
+    if c == 34 { pos = pos + 1; return Ok::<bool, crate::lex::Fault>(plain); }
+    if c < 32 { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 16 }); }
+    pos = pos + 1;
+    plain = false;
+    if pos == end { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
+    let esc: i64 = input[pos];
+    if esc == 117 {
+      pos = pos + 1;
+      let hex_start: i64 = pos;
+      let mut k: i64 = 0;
+      while k < 4
+        invariant 0 <= k && k <= 4 && start < pos && pos <= end && end <= len(input)
+        invariant pos >= hex_start
+        decreases 4 - k
+      {
+        if pos == end { return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
+        let h: i64 = input[pos];
+        if !((48 <= h && h <= 57) || (65 <= h && h <= 70) || (97 <= h && h <= 102)) {
+          return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 15 });
+        }
+        pos = pos + 1;
+        k = k + 1;
+      }
+    } else {
+      if esc != 34 && esc != 92 && esc != 47 && esc != 98 && esc != 102 && esc != 110 && esc != 114 && esc != 116 {
+        return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 14 });
+      }
+      pos = pos + 1;
+    }
+  }
+  return Err::<bool, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 17 });
+}
+
 // Token packet for the reusable-scratch path `scan_into` (P8) only; the recursive path dispatches in `record`.
 fn token_at(input: [u8], start: i64, end: i64, key: bool, inout pos: i64) -> Lexed
   requires 0 <= start && start < end && end <= len(input) && pos == start
@@ -99,7 +153,7 @@ fn token_at(input: [u8], start: i64, end: i64, key: bool, inout pos: i64) -> Lex
   let c: i64 = input[pos];
   if key && c != 34 { return Lexed::Error(7); }
   if c == 34 {
-    let text: Result<bool, crate::lex::Fault> = string_token(input, start, end, false, inout pos);
+    let text: Result<bool, crate::lex::Fault> = string_token(input, start, end, inout pos);
     match text {
       Err(fault) => { return Lexed::Error(fault.kind); }
       Ok(plain) => {
@@ -242,7 +296,7 @@ fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i6
   let mut kind: i64 = 0;
   let mut plain: i64 = 0;
   if byte == 34 {
-    let simple: bool = string_token(input, start, end, true, inout pos)?;
+    let simple: bool = string_token_valid(input, start, end, inout pos)?;
     if simple { plain = 1; }
     kind = 4;
     if key { kind = 7; }

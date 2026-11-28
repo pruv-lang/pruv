@@ -1544,3 +1544,52 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   1.00-1.06 on M/L cells (turns16-200, ring_wrap, window_8MiB, depth_limit, long_text), largest on rs/rust
   (turns200 head 1.057). The gap is 16-110 KB, roughly flat across sizes, so it looks like a fixed share; this has not
   been split into fixed and proportional parts yet. Open as 4.4zf-RS.
+
+### Rows after L-gaps 28
+
+- 4.4zf-LT: long_text window fixed in shared code; most of the cost was not the scan loop.
+  - `parse::record` now calls `string_token_valid`, a scan for input that is already known to be valid UTF-8. It
+    stops only at a quote, a backslash or a control byte, like the hand's `bytes().position(..)`. The old
+    `string_token` lost its `checked` parameter and now serves only the unvalidated `token_at` path. On its own this
+    did not move the cell (1.22): a kept a4 build, profiled with `sample`, showed the record scan loop already about as
+    fast as the hand's.
+  - The cost was in the claude user-text path. `string_field_of` / `string_content` call `access::string_text_owned`,
+    which always ran the `jstr` escape decode. That decode reads every byte to look for a backslash that a plain
+    string does not have. `string_text_owned` now checks the tape plain bit (slot 5 == 1) and copies the raw span with
+    `jstr::string_text_plain_owned`, which is the hand's `Cow::Borrowed` case. Both branches give the same text.
+  - Measured under the perf lock, load about 2 (claude `q_measure.py --pairs rs/rust,rs/llvm`, 7 rounds; local
+    `work/lgaps28/perf_cells.json`; 11-round long_text run in `work/lgaps28/long_text_q.json`):
+    - long_text window: 1.20 -> 1.029 on rs/rust, 0.90 -> 0.729 on rs/llvm.
+    - No time cell got worse by more than 0.03 against L-gaps 27; turns and ring_wrap moved 0.03-0.18 lower.
+  - The `i64` casts are not a cost: the scan loop assembly is the same length as the hand's.
+  - The last 3 % on rs/rust is representation, not a loop. `parse::parse` copies the line into
+    `JsonDocument.source`, and the reply keeps an owned copy of the text. The hand borrows both from the input line.
+    Removing the copies needs a borrowed document (tape plus `&[u8]` source with a lifetime), which Pruv does not have.
+    Open as 4.4zg-LB (borrowed document source).
+- 4.4zf-RS: the peak RSS gap is a fixed share, not a proportional one. Kept builds were run with `/usr/bin/time -l`,
+  hand and Pruv rs/rust alternating, 7 runs each, median:
+
+  | input (window unless named) | input bytes | hand KiB | Pruv KiB | Pruv - hand KiB |
+  |---|---:|---:|---:|---:|
+  | empty file | 0 | 1600 | 1632 | 32 |
+  | turns1 | 195 | 1616 | 1680 | 64 |
+  | turns10 | 1950 | 1712 | 1792 | 80 |
+  | turns200 | 39580 | 1984 | 2080 | 96 |
+  | turns200 head | 39580 | 1680 | 1776 | 96 |
+  | ring_wrap | 399780 | 2336 | 2432 | 96 |
+  | window, first 1 MiB | 1048493 | 2960 | 3072 | 112 |
+  | window, first 4 MiB | 4194177 | 6064 | 6176 | 112 |
+  | window_8MiB | 8388476 | 10160 | 10256 | 96 |
+  | long_text | 7340032 | 11152 | 11216 | 64 |
+  | depth_limit | 952890 | 2800 | 2928 | 128 |
+  | block_arrays | 3392750 | 9168 | 7104 | -2064 |
+
+  - The gap does not grow with input: 32 KiB with no input, 64-128 KiB as soon as code runs, the same from 195 bytes
+    to 8 MiB. There is no proportional part to fix.
+  - Cause: code size. The Pruv runner has 351676 bytes of `__text` against 282364 for the hand runner (about 68 KB,
+    17 pages more); `__DATA` is the same size. The 32 KiB at zero input is the larger image mapped at start; the rest
+    is the extra code pages that the parse, access and reply paths touch once. No start buffer differs: both reserve
+    their buffers lazily, and block_arrays shows the Pruv buffers below hand.
+  - perf_gate still counts these cells as proportional failures (28 cells, 1.004-1.047, all RSS except depth_limit
+    time and long_text rs/rust time). They are fixed-share debt. Which functions make up the 68 KB has not been
+    broken down yet (next: symbol sizes of both runners). Open as 4.4zg-CS (generated code size).

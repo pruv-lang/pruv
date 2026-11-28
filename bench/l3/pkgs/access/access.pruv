@@ -374,6 +374,12 @@ pub fn string_text_owned(doc: crate::json::JsonDocument, id: i64) -> crate::jstr
   if k != 4 { if k < 0 { return crate::jstr::Text::InternalInvariant(k); } return crate::jstr::Text::InternalInvariant(-2); }
   let s: Span = raw_span(doc, id);
   if s.status != 0 { return crate::jstr::Text::InternalInvariant(s.status); }
+  // 4.4zf-LT: a plain node (no backslash, tape slot 5 == 1) is the hand's `Cow::Borrowed`: one copy of the raw
+  // span. The escape decode would scan every byte for a backslash it cannot find (scanned mode copies the same
+  // bytes), so both branches give the same text.
+  if doc.tape[6 * id + 5] == 1 {
+    return crate::jstr::string_text_plain_owned(doc.source, s.start, s.end);
+  }
   return crate::jstr::string_text_owned(doc.source, s.start, s.end);
 }
 
