@@ -2916,11 +2916,12 @@ read by the checker, the verifier and both backends.
   narrowing is `x as u8` in Rust and `trunc` in LLVM; with `--no-verify` an out-of-range value stops the program with
   `pruv: arithmetic error: cast out of range` (exit 101). Tests: [accept](tests/spec/r6p_2_accept.pruv),
   [reject](tests/spec/r6p_2_reject.pruv), [contract](tests/spec/r6p_2_reject_contract.pruv).
-- R-6p-3 **Not yet supported.** These are rejected with `small_int_unsupported` (stage `parse` or `type`) and a
-  message naming the later bundle: `u8`/`u16` as a type argument (`Option<u8>`, `Vec<u16>`,
-  generics; P11) or an enum payload (P11); any integer type other than `i64`, or `[u16]`, in the signature of a
-  trusted rust (foreign) function (P12), and in a host-facing signature on the LLVM backend (R-6p-6; a private function
-  whose signature holds such a type, directly or inside a struct, is never a host entry). Since P3 the integer types `u32 i32 usize isize u64 i8 i16` exist (R-6p-5), and
+- R-6p-3 **Not yet supported.** These are rejected with `small_int_unsupported` and a message naming the later
+  bundle: `u8`/`u16` as a type argument (`Option<u8>`, `Vec<u16>`, generics; P11) or an enum payload (P11), stage
+  `parse` or `type`; any integer type other than `i64`, or `[u16]`, in the signature of a trusted rust (foreign)
+  function (P12, stage `parse`); and the same in a host-facing signature on the LLVM backend (R-6p-6, stage `codegen`;
+  a private function or a child-module `pub` function whose signature holds such a type, directly or inside a struct,
+  is never a host entry). Since P3 the integer types `u32 i32 usize isize u64 i8 i16` exist (R-6p-5), and
   indexes and `decreases` measures follow R-6p-5. Tests: [accept](tests/spec/r6p_3_accept.pruv),
   [reject](tests/spec/r6p_3_reject.pruv).
 - R-6p-4 **`[u16]` buffers (P2).** `[u16]` (owned) and `ref [u16]` (borrowed, with the `from(...)` and `subview` rules
@@ -2970,12 +2971,17 @@ read by the checker, the verifier and both backends.
   representation check as `&[i64]`; `requires` is checked in the wrapper as for `i64`. Nothing is converted or copied
   at the boundary. A `requires` on an integer is evaluated in `i128`, so `u64::MAX` passes `x > 0`. A struct whose
   fields have such types crosses as the Rust struct with the same field types; a narrow enum payload keeps the P11
-  rule. A fixed-length array `[T; N]` at a host entry stays `type/fixed_array_position`. Still rejected with
+  rule. A `take` or `inout` `[u16]`/`[u8]` parameter follows the `[i64]` rules (`Vec<u16>`, `&mut [u16]`). A scalar
+  `inout` of any integer width at a host entry stays `type/entry_signature` (R-6g-4). A fixed-length array `[T; N]` at
+  a host entry stays `type/fixed_array_position`. Still rejected with
   `small_int_unsupported`: such a type in a trusted rust fn signature (stage
   `parse` or `type`) and in a host-facing signature on the LLVM backend, including its Rust bindings (stage
-  `codegen`; a later P12 bundle, docs/P12_HOST_SPEC.md). Tests: [accept](tests/spec/r6p_6_host_accept.pruv),
+  `codegen`; a later P12 bundle, docs/P12_HOST_SPEC.md). A child-module `pub` function is not a host entry, so on
+  LLVM it keeps such types like any internal function. Tests: [accept](tests/spec/r6p_6_host_accept.pruv),
   [requires](tests/spec/r6p_6_host_requires.pruv), [module](tests/spec/r6p_6_host_module/root.pruv),
-  [LLVM reject](tests/spec/r6p_6_host_reject_llvm.pruv), [foreign reject](tests/spec/r6p_6_host_reject_foreign.pruv).
+  [modes](tests/spec/r6p_6_host_modes.pruv), [LLVM module](tests/spec/r6p_6_host_module_llvm/root.pruv), [LLVM reject](tests/spec/r6p_6_host_reject_llvm.pruv),
+  [foreign reject](tests/spec/r6p_6_host_reject_foreign.pruv),
+  [foreign `[u16]` reject](tests/spec/r6p_6_host_reject_foreign_u16.pruv).
 
 ## 6q. For loops (P4)
 ```
@@ -4258,7 +4264,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/refinement_position` | parse | a refinement `\| L..=U` outside a parameter, return or `let` type |
 | `parse/refinement_syntax` | parse | malformed refinement bounds |
 | `parse/reserved_name` | parse | a name reserved for the compiler (`pruv_` prefix, `__`, a Rust keyword) |
-| `parse/small_int_unsupported` | parse | a non-`i64` integer use that a later bundle adds: type argument, foreign signature, array of a P3 width (R-6p-3, R-6p-5, R-6p-6) |
+| `parse/small_int_unsupported` | parse | a non-`i64` integer use that a later bundle adds: type argument, non-`i64` integer or `[u16]` in a foreign signature, array of a P3 width (R-6p-3, R-6p-5, R-6p-6) |
 | `parse/std_import_location` | parse | `mod std;` outside the program root |
 | `parse/std_module_conflict` | parse | a local `std.pruv` conflicts with the bundled std module |
 | `parse/std_source` | parse | the bundled std module cannot be read |

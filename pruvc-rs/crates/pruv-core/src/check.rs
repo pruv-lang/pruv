@@ -3406,7 +3406,8 @@ impl Checker {
                 return Err(terr(f.line, f.col, "entry_signature",
                     format!("host entry {} cannot take parameter {} of struct {} with an invariant", f.name, p.name, owner.name), ""));
             }
-            if let Some(p) = f.params.iter().find(|p| p.mode_pos.is_some() && matches!(p.ty.as_str(), "i64" | "bool")) {
+            if let Some(p) = f.params.iter().find(|p| p.mode_pos.is_some()
+                && (p.ty == "bool" || GType::from_key(&p.ty).int_width().is_some())) {
                 return Err(terr(f.line, f.col, "entry_signature",
                     format!("host entry {} cannot take scalar inout parameter {}", f.name, p.name), ""));
             }

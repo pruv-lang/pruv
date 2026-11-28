@@ -2,7 +2,7 @@
   "run": {
     "backends": ["rust"],
     "exit": 101,
-    "flags_matrix": [[]],
+    "flags_matrix": [[], ["--no-verify"]],
     "stdout_lines": ["4"],
     "stderr_contains": "pruv: requires violated: crate::pick"
   }

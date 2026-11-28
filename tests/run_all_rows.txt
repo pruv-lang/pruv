@@ -3236,6 +3236,7 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_two_sources.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_13_iw_whole.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_accept.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_requires.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--proven-entries"], "group": "runtime", "mode": null, "sample": "tests/runtime/p9b_rt_proven.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers", "--contract-budget", "1000"], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r21_contract_size_pass.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers", "--foreign-checks", "off"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r19_requires_off.pruv"}
@@ -6087,6 +6088,7 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps9_str_bytes_len.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps9_views_subview_len.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps9_views_subview_sum.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p12a_inout_u8_entry.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_add_overflow.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_bit_and.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_cast_in_contract.pruv"}

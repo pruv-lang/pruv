@@ -1307,6 +1307,7 @@ must_reject|tests/must_reject/lgaps9_str_bytes_escape.pruv	1 case: obl=0 1	defau
 must_reject|tests/must_reject/lgaps9_str_bytes_len.pruv	1 case: obl=1 1	default=c1c8253b5814
 must_reject|tests/must_reject/lgaps9_views_subview_len.pruv	1 case: obl=5 1	default=b664f1052678
 must_reject|tests/must_reject/lgaps9_views_subview_sum.pruv	1 case: obl=5 1	default=520fbd25b7f7
+must_reject|tests/must_reject/p12a_inout_u8_entry.pruv	1 case: obl=0 1	default=c7ad0618823e
 must_reject|tests/must_reject/p1_add_overflow.pruv	1 case: obl=1 1	default=e1d17f5d2eac
 must_reject|tests/must_reject/p1_bit_and.pruv	1 case: obl=0 1	default=ce42aa03fda7
 must_reject|tests/must_reject/p1_cast_in_contract.pruv	1 case: obl=0 1	default=0403482cabf8

@@ -34,8 +34,10 @@ a UTF-8 check followed by one copy reads each byte twice and is still O(n)).
 
 | Pruv position | Generated Rust public signature |
 |---|---|
-| `x: u8` / `-> u8` (likewise `u16 u32 u64 i32`) | `pub fn f(x: u8) -> u8` |
+| `x: u8` / `-> u8` (likewise `u16 u32 u64 usize i8 i16 i32 isize`) | `pub fn f(x: u8) -> u8` |
 | read `a: [u8]`, `sid: [u16]` | `pub fn f(a: &[u8], sid: &[u16])` |
+| `take s: [u16]` / `inout s: [u16]` | `s: Vec<u16>` / `s: &mut [u16]` (the `[i64]` rules) |
+| `inout x: u8` (any integer) | `type/entry_signature`, as for `i64` (R-6g-4) |
 
 - Each parameter and the result use the table on their own. `[u16]` is 16-bit code units; `0xD800` passes unchanged. No
   borrowed result or `ref` marker is added.
@@ -49,7 +51,8 @@ a UTF-8 check followed by one copy reads each byte twice and is still O(n)).
   length check stays).
 - The same table applies to a single-file `pub fn` and a module program's root host entry. Child-module `pub` functions,
   dependency package roots, methods and generic instances get no host symbol; P12a does not widen the implicit public set
-  of legacy files without `pub` items (their narrow-signature functions stay private items).
+  of legacy files without `pub` items (their narrow-signature functions stay private items). On LLVM a child-module
+  `pub` function is internal too and keeps narrow types (tests/spec/r6p_6_host_module_llvm).
 - A public struct with narrow fields crosses as the Rust struct with the same field types (no conversion;
   `pair_sum(p: Pair)` in tests/spec/r6p_6_host_accept). A narrow enum payload keeps the P11 rule. On LLVM a narrow
   field or a `[u16]` field is rejected like a direct one.
@@ -68,8 +71,8 @@ a UTF-8 check followed by one copy reads each byte twice and is still O(n)).
    (tests/spec/r6p_6_host_module).
 4. LLVM host signature with a narrow int or `[u16]`: `codegen/small_int_unsupported` (tests/spec/r6p_6_host_reject_llvm,
    tests/must_reject/p1_pub_sig, p2_u16_pub_sig).
-5. Trusted rust fn with `u64`: `parse/small_int_unsupported` (tests/spec/r6p_6_host_reject_foreign,
-   tests/must_reject/p3_pub_u64).
+5. Trusted rust fn with `u64` or `[u16]`: `parse/small_int_unsupported` (tests/spec/r6p_6_host_reject_foreign,
+   r6p_6_host_reject_foreign_u16, tests/must_reject/p3_pub_u64).
 
 ## Next bundle
 

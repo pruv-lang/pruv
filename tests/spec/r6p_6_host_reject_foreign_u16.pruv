@@ -1,0 +1,4 @@
+// spec: R-6p-6 reject
+// P12a: a trusted rust fn keeps rejecting [u16] in its signature
+trusted rust fn rust_len(a: [u16]) -> i64
+  = "::core::primitive::slice::len";

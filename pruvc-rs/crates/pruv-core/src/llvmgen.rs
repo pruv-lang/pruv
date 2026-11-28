@@ -10407,7 +10407,8 @@ pub fn gen_llvm_with_specializations(
         let public = mark.is_some_and(|mark| mark.is_pub || mark.host_entry) && !methods.contains(f.name.as_str());
         // L-gaps 20: a module `pub` function (not a host entry) may pass `[T; N]` by value
         let host = f.foreign.is_some() || mark.is_some_and(|mark| mark.host_entry) || prog.explicit.is_none();
-        if (public || f.foreign.is_some()) && {
+        // P12a: only a host entry or a foreign fn is a host boundary; a module `pub` function is internal
+        if (public || f.foreign.is_some()) && host && {
             let table = tt0.get_or_insert_with(|| crate::emit_common::make_type_table(prog));
             crate::emit_common::has_llvm_unsupported_int_sig(f, table, !host)
         } {
