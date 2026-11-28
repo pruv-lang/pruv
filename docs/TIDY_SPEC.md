@@ -385,6 +385,9 @@ by byte-identical output and run by group, with the full test suite once before 
       stale; run `tests/abi/winci/prepare.py --check` when ABI codegen changes.
     - HC-9 `tests/spec_trace.py:57` does not fail on SPEC sections without any rule ID (10 of 42); add IDs or
       an explicit exemption list for the example section.
+    - HC-10 four behaviour differences between the budget M12 lane and hand Rust reported by the M12-R table
+      draft (attach without id, run op 4 without a run key, settle bound +-(SAFE+1) vs +-SAFE, query op outside
+      1..2; `bench/l3/budget/RESHAPE.md` §4): reproduce each with M12 Q inputs, then fix or record as known.
     Recorded, not queued yet: LLVM `par` per-thread 64 KiB block cache not returned at thread exit
     (`pruvc/runtime.c:208`, `parallel_shim.rs:34`), measure under repeated `par` before a row; trusted
     declarations 7 -> 42 in 14 days (26 in budget), counted at every broad check; uncalled
