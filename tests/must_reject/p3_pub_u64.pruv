@@ -1,2 +1,4 @@
-// P3: u64 at the host boundary is bundle P12
-pub fn f(x: u64) -> i64 { return 0; }
+// P12a: u64 in a trusted rust fn signature stays rejected (foreign signatures keep i64 only)
+trusted rust fn f(x: u64) -> i64
+  ensures true
+  = "::std::convert::identity";

@@ -1,0 +1,5 @@
+// spec: R-6p-6 reject
+// P12a: a trusted rust fn keeps rejecting non-i64 integers in its signature
+trusted rust fn rust_min(a: u64, b: u64) -> u64
+  ensures result <= a
+  = "::std::cmp::min";

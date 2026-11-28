@@ -1,0 +1,45 @@
+// spec: R-6p-6 accept
+// P12a: narrow integers and borrowed [u8]/[u16] at the Rust host boundary (hand Rust `pub fn reference(sid: &[u16])`)
+pub fn first_unit(sid: [u16]) -> u16
+  requires len(sid) > 0
+{
+  return u16(sid[0]);
+}
+
+pub fn unit_sum(sid: [u16]) -> u64
+{
+  let mut s: u64 = 0;
+  let mut i: i64 = 0;
+  while i < len(sid)
+    invariant 0 <= i && i <= len(sid)
+    invariant i64(s) <= i * 65535
+    decreases len(sid) - i
+  {
+    s = s + u64(sid[i]);
+    i = i + 1;
+  }
+  return s;
+}
+
+pub fn byte_at(b: [u8], i: u32) -> u8
+  requires i64(i) < len(b)
+{
+  return u8(b[i]);
+}
+
+pub fn widen(a: u8, b: u16, c: u32, d: i32) -> u64
+  requires i64(d) >= 0
+{
+  return u64(a) + u64(b) + u64(c) + u64(d);
+}
+
+pub fn halve(x: u64) -> u64
+{
+  return x / 2;
+}
+
+pub fn negate(x: i32) -> i32
+  requires i64(x) > -2147483648
+{
+  return 0 - x;
+}

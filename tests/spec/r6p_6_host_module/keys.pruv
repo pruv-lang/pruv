@@ -1,0 +1,5 @@
+pub fn unit(sid: [u16], i: u32) -> u16
+  requires i64(i) < len(sid)
+{
+  return u16(sid[i]);
+}

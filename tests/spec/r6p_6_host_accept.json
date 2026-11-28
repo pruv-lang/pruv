@@ -1,0 +1,14 @@
+{
+  "gen_contains": [
+    "pub fn first_unit(sid: &[u16]) -> u16",
+    "pub fn byte_at(b: &[u8], i: u32) -> u8",
+    "pub fn widen(a: u8, b: u16, c: u32, d: i32) -> u64",
+    "pub fn negate(x: i32) -> i32"
+  ],
+  "run": {
+    "backends": ["rust"],
+    "exit": 0,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["55296", "120837", "255", "6442516732", "9223372036854775807", "2147483647"]
+  }
+}
