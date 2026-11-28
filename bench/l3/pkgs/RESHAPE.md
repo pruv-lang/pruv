@@ -1638,3 +1638,19 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
     above 1.0 are window_8MiB tail rs/llvm (1.024) and turns0 window rs/rust (1.976), both at the one-tick timer floor
     (41-83 µs).
   - The source copy of the line (the document's own `[u8]`) is still the open part of this row.
+
+### Rows after L-gaps 30
+
+- 4.4zg-CS: closed. The `__text` gap came from the copy-budget arm of the Rust compiler's inline policy, not from the
+  one-call-site arm. Each generated function's inline marks were replayed with a port of the policy on the claude a4
+  runner (local `work/lgaps30/cs_policy.py`; the unchanged port gives the same 376380 B as the compiler):
+  - `__text`: hand 282364 B; policy before 376380 B (251 forced-inline functions); without the copy budget 289340 B
+    (208); without the one-call-site arm 318204 B; no forced inline at all 287868 B.
+  - The budget let a function of up to 1500 lines be copied into a second caller, and each copy kept its own Vec grow
+    paths. Removing it keeps the small-function and one-call-site arms.
+  - Rust compiler only: `pruvc-rs/crates/pruv-core/src/inline_policy.rs` now forces inline for `incl <= INLINE_SMALL`
+    or exactly one call site (SPEC R-7-3). The frozen Python compiler and the LLVM rule R-7-7 are unchanged.
+  - Time, claude `rs/rust` against hand, 7 alternating rounds under the perf lock at load about 1.9: every time cell
+    stays at or below hand within noise, long_text window 1.012 -> 1.006; the RSS cells drop from 1.04-1.07 to
+    0.99-1.03. json `run_r03_measure.py`, old and new compiler alternating: all cells at or below hand
+    (query_chain1 L 9.15 -> 7.72 ms against hand 8.4-9.2 ms).

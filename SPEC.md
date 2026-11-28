@@ -3965,7 +3965,8 @@ using `cost` or `par` also define unprefixed). Two programs with different packa
 ### Inline policy (generated Rust)
 R-7-3 Each generated Rust fn that the code generator emits with an `#[inline]` hint (such as the `F__pruv_body`
 functions) gets its final hint from one pass over the finished Rust text; fns emitted without
-the hint keep none. The Python and Rust compilers use the same pass, so their output stays byte-identical:
+the hint keep none. The frozen Python compiler keeps the earlier rule with a copy budget (below); the Rust compiler
+follows this rule:
 - A fn is recursive if it can reach itself through calls (directly or through other fns). Recursive fns keep
   `#[inline]`.
 - The size of a fn is its number of body lines (1 for a one-line fn). Its inclusive size `incl` is its size plus, for
@@ -3973,8 +3974,12 @@ the hint keep none. The Python and Rust compilers use the same pass, so their ou
   nothing.
 - Call sites are counted textually over the whole output: a fn name followed by `(`, not after `.` and not in its own
   `fn name(` header.
-- A non-recursive fn gets `#[inline(always)]` when `incl <= 8`, when it has exactly one call site, or when it has at
-  least two call sites and `incl * (call sites - 1) <= 1500` (the extra copies inlining adds). A fn with zero call
+- A non-recursive fn gets `#[inline(always)]` when `incl <= 8` or when it has exactly one call site. A fn with two or
+  more call sites and `incl > 8` keeps `#[inline]`. Why: the earlier rule also forced it when
+  `incl * (call sites - 1) <= 1500` (the extra copies inlining adds); on the claude a4 runner those copies were
+  87 KB of `__text` in the harness `call` (376,380 B against 282,364 B for the hand Rust, which has no inline
+  attributes). Without the copy budget it is 289,340 B and every claude time cell stays at or below its earlier
+  ratio within run noise (4.4zg-CS in `bench/l3/pkgs/RESHAPE.md`). A fn with zero call
   sites in the output (any visibility; in practice a host entry such as `pub fn m11_load`, called only from the
   harness, whose calls the pass does not see) is therefore promoted only by `incl <= 8`. Every other fn keeps `#[inline]` and is left to rustc's heuristics. Why: host entries called from
   harness closures would otherwise be copied into every closure; measured on M11 in `docs/L3_RESTRUCTURE_SPEC.md`
