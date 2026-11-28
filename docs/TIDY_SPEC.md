@@ -409,6 +409,10 @@ by byte-identical output and run by group, with the full test suite once before 
       against the Node oracle the lane was wrong on attach without id (malformed ref) and run op 4 without a run
       key (status 2); both lanes fixed. Hand attach, the missing-vs-empty run key, the settle clamp (KD-M6-1
       domain) and query ops outside 1..3 (oracle cannot send them) are known differences in RESHAPE §4.
+    - HC-11 `bench/l3/json/run_q` fails before and after P11-db (same counts at e933af87): both rs/rust and rs/llvm
+      pairs disagree with the oracle on 2855 cases (shortest: input `""`, tape word 6 is 1, oracle 0), and the two
+      py pairs fail with `KeyError 'py'` since the Python compiler was frozen. Find whether the oracle or the lane is
+      wrong, fix it, and drop or mark the py pairs. Not in run_all or CI, so nothing else catches it.
     Recorded, not queued yet: LLVM `par` per-thread 64 KiB block cache not returned at thread exit
     (`pruvc/runtime.c:208`, `parallel_shim.rs:34`), measure under repeated `par` before a row; trusted
     declarations 7 -> 42 in 14 days (26 in budget), counted at every broad check; uncalled
