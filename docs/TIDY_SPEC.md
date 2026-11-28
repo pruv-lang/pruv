@@ -375,7 +375,9 @@ by byte-identical output and run by group, with the full test suite once before 
       runtime sorted check of a fixed array uses its static length and element type (sign- or zero-extended to
       i128); `tests/runtime/hc2_rt_sorted_fixed` (`[i64; 2]`, `[u8; 3]`, both backends) accepts and rejects.
     - HC-3 Rust name capture: a parameter named like a called function (`bump: i64` and `bump()`) emits
-      `return bump();` on the parameter (`pruv-core/src/codegen.rs:6594`). Needs a rustc-built twin.
+      `return bump();` on the parameter (`pruv-core/src/codegen.rs:6594`). Needs a rustc-built twin. Done: (P11-zi)
+      a call whose name is a parameter, local or bound variable in scope emits `self::bump()`; the LLVM backend
+      already used the function symbol. Twin `tests/runtime/hc3_rt_param_shadow` (both backends) prints 10.
     - HC-4 R-7-3 mismatch (also 4.4zh-IP, in P11-zh): explicit `#[inline]` cuts the recursion graph and
       `__pruv_fp` uses the adapter's call count (`pruv-core/src/inline_policy.rs:48,156`).
     Queued, tests/harness bundle (no compiler change, may run beside a compiler bundle):
