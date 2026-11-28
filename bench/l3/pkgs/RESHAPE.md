@@ -1540,3 +1540,7 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
     - Possible shared fix, not tried in L-gaps 27 (time cap): give `pkgs/parse` a scan for checked input that only
       advances to the first quote, backslash or control byte, and use it on the `record` string path.
     - Open as 4.4zf-LT.
+- Peak RSS stays slightly above hand on most cells (tools/perf_gate.py: 29 failing cells, all better than L-gaps 26):
+  1.00-1.06 on M/L cells (turns16-200, ring_wrap, window_8MiB, depth_limit, long_text), largest on rs/rust
+  (turns200 head 1.057). The gap is 16-110 KB, roughly flat across sizes, so it looks like a fixed share; this has not
+  been split into fixed and proportional parts yet. Open as 4.4zf-RS.
