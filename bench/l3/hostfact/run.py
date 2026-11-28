@@ -1,5 +1,5 @@
-"""P10H runner: host rlib + root.pruv on py/rs x rust/llvm, Rust harness `gates` and `perf`.
-usage: run.py [--rounds N] [--only gates|perf]   (work files under bench/l3/hostfact/work/)"""
+"""P10H runner: host rlib + root.pruv with gates, perf, and a Rust-only request grid.
+usage: run.py [--rounds N] [--only gates|perf|grid] [--max-s N]"""
 import sys
 sys.dont_write_bytecode = True
 import argparse, importlib.util, json, os, subprocess
@@ -11,7 +11,8 @@ c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c)
 
 ap = argparse.ArgumentParser(description=__doc__)
 ap.add_argument('--rounds', type=int, default=7)
-ap.add_argument('--only', choices=['gates', 'perf'])
+ap.add_argument('--only', choices=['gates', 'perf', 'grid'])
+ap.add_argument('--max-s', type=int)
 args = ap.parse_args()
 if args.rounds < 7:
     ap.error('--rounds must be >= 7')
@@ -24,6 +25,30 @@ def sh(cmd, data=None):
     return run(cmd, data)
 
 
+def run_grid(key, exe, out):
+    p = subprocess.run([str(exe), 'gates'], capture_output=True, text=True, timeout=600)
+    for line in p.stdout.splitlines():
+        print(f'{key}: {line}', flush=True)
+    if p.returncode:
+        raise RuntimeError(f'grid gates exit {p.returncode}\n{p.stderr}')
+
+    cmd = [str(exe), 'grid', str(args.rounds), str(out / 'grid_cells.json')]
+    if args.max_s is not None:
+        cmd.extend(['--max-s', str(args.max_s)])
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if p.returncode:
+        raise RuntimeError(f'grid exit {p.returncode}\n{p.stderr}')
+    print(f'\n{key} grid (median ns; calls = session_list/is_temporary)')
+    print(f"{'cell':<25} {'hand':>12} {'nocopy':>12} {'pruv':>12} {'prefix':>8} "
+          f"{'pruv_adj':>12} {'ratio':>7}  calls")
+    for line in p.stdout.splitlines():
+        row = json.loads(line)
+        ratio = row['pruv_adj_ns'] / max(row['hand_ns'], 1)
+        print(f"{row['cell']:<25} {row['hand_ns']:12d} {row['nocopy_ns']:12d} "
+              f"{row['pruv_ns']:12d} {row['prefix_ns']:8d} {row['pruv_adj_ns']:12d} "
+              f"{ratio:7.3f}  {row['sl_calls']}/{row['temp_calls']}")
+
+
 # host rlib: same flags as bench/g6/run.py build_rlib
 rlib = WORK / 'libhostfact_host.rlib'
 sh([g.RUSTC, '-O', '--edition', '2021', '--crate-type', 'rlib', '--crate-name', 'hostfact_host', HERE / 'host.rs', '-o', rlib])
@@ -32,14 +57,30 @@ flags = ['--rust-extern', f'hostfact_host={rlib}', '--manifest', str(HERE / 'pru
 
 failed = False
 perf = {}
+llvm_pending = False
 for compiler, backend in c.PAIRS:
     key = f'{compiler}/{backend}'
+    if args.only == 'grid' and backend != 'rust':
+        if not llvm_pending:
+            print('llvm: pending (P17b/c)')
+            llvm_pending = True
+        continue
     try:
         out = WORK / f'{compiler}_{backend}'; out.mkdir(exist_ok=True)
         built = g.compile_pruv(compiler, str(HERE / 'root.pruv'), str(out), backend, flags)
         if built['rc']:
             raise RuntimeError('compile/verify failed: ' + str(built['errors'] or built['stderr']))
         print(f'{key}: verified and compiled', flush=True)
+        if args.only == 'grid':
+            harness = out / 'grid_main.rs'
+            req = HERE.parent / 'req' / 'hand' / 'req.rs'
+            harness.write_text((HERE / 'req_grid.rs').read_text()
+                               .replace('@SOL@', built['rs']).replace('@REQ@', str(req)))
+            exe = out / 'grid_runner'
+            sh([g.RUSTC, '-O', '--edition', '2021', harness, '-o', exe,
+                '--extern', f'hostfact_host={rlib}'])
+            run_grid(key, exe, out)
+            continue
         harness = out / 'main.rs'
         harness.write_text((HERE / 'harness.rs').read_text().replace('@SOL@', built['rs']))
         extra = []

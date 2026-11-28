@@ -1226,7 +1226,7 @@ All after the last code change (F1 / F4 from the structure comparison).
 
 ## Step 4.4: Entry / req
 
-- P10H gate (synchronous host facts; req fresh-query / order and timing contract): **not met**, so `req` stays
+- P10H gate (synchronous host facts; req fresh-query / order and timing contract): **not met** at 4.4 (Rust grid passed later, P10H grid bullet below), so `req` stays
   blocked and its decisions were not ported. Evidence: `docs/L3_RESTRUCTURE_SPEC.md:232`, `:378` (P10H row), `:485`
   (req row 11), `:493` (grid), `:529` (R11), `:1245`, `:333` (LLVM pending P17b/P17c), `:1690` (verdict "blocked on
   the LLVM backend", `rq_find` rs/llvm 1.193x); `bench/l3/hostfact/README.md:41-44` ("The full request engine is not
@@ -1257,6 +1257,12 @@ All after the last code change (F1 / F4 from the structure comparison).
   REQ-D (`"default"` literal), and hand-model rows REQ-B, REQ-T, REQ-X, REQ-O, REQ-S, REQ-L.
 - Still open: U, K, L, E, O, OA, S, P-start, VE, PB, CMP, ENT, CK, DR, J, RA, SA, HK, LB, MP, OR, TM, VB, TH, FO, FV, UL, VP,
   IW, VL, 4.3d-M, 4.3d-H, 4.3f-S, 4.3f-E, 4.3g-SQ, and the 4.3g / 4.3h bench rows above.
+- P10H grid (Rust backend, appendix P10H.6): the synchronous-fact kernels `hostfact/root.pruv` `rg_list` / `rg_open`
+  against `req/hand/req.rs` on the full 36-cell grid pass every gate and `tools/perf_gate.py` (0.009x-0.152x, 9
+  rounds, load < 6). Wait item (2) is met for Rust only. REQ-PORT stays blocked: (1) LLVM P17b / P17c (grid pending)
+  and the new row REQ-SNAP (with REQ-B), because a hand without the per-lookup copy beats Pruv on most M >= 10 cells
+  (nocopy control 0.89x-15x); item (3) is started by the kernels, not done (REQ-PFX). New rows REQ-G6R, REQ-SNAP,
+  REQ-TL, REQ-PFX (`req/RESHAPE.md` §3).
 - Next:
   1. OpenCode bench rows 4.3g-P, 4.3g-R, 4.3g-Q, 4.3g-K, 4.3g-D, 4.3g-N, 4.3g-A, 4.3g-X, 4.3g-F, 4.3g-E (`opencode/`
      only; 4.3g-P first).

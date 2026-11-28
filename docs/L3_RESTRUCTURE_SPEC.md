@@ -375,7 +375,7 @@ Paths use the citation prefixes. Future edits only; C/P refer to §6.1. Each sub
 | P08 | RP/symbolic.rs,lib.rs: mirror P07 and agreement | C: obligation/acceptance agreement and solver CPU, not product Q substitutes. |
 | P09 | Both Rust codegens/bindings + private adapter: visibility, trust-callers and poison | C ABI: arbitrary-buffer safe access rejected, partial-write/alloc/host panic injection, no poisoned observation/reuse, normal clear and safe drop. P: narrow Q1/Q2 M4 trial after C passes. |
 | P10 | Both LLVM emitters/foreign bindings: single-pointer opaque adapter handle | C ABI/provenance/lifetime/no-unwind probes; fixed pointer count, no registry/SoA public entries. Measure poison and remaining overlap costs; preliminary boundary results pending P17c. |
-| P10H | Budget and req concrete G6 host-fact signatures and adapters | C existing-foreign ABI regression/signature gates; P query order/result validation, host failure/reentry refusal. Measure budget synchronous path before dependent operations; req fresh-query/420k-call complete grid must pass before req unblocks. No decision logic in Rust. |
+| P10H | Budget and req concrete G6 host-fact signatures and adapters | C existing-foreign ABI regression/signature gates; P query order/result validation, host failure/reentry refusal. Measure budget synchronous path before dependent operations; req fresh-query/420k-call complete grid must pass before req unblocks. No decision logic in Rust. Rust grid: pass (36/36 cells 0.009x-0.152x, all gates; P10H.6); LLVM pending P17b/c; req still blocked (REQ-SNAP). |
 | P11 | B/bud_store.pruv,bud_map.pruv: import I0+I1 | P: malformed headers/offsets/links/keys, linear admission counts; I2 model tests separate from safety proof. |
 | P12 | Same: local I1 mutator frames and guard removal one accessor at a time | C proof negatives if verifier changed; P Q2/Q3 churn/stale handles. Keep total accessors/step budgets until each local bound proved. |
 | P13 | Same + B/host.rs: reserve/grow/failure | P Q2/Q3 growth, no replay of effects/queries, old state valid or terminal poison; byte/copy accounting. |
@@ -1754,6 +1754,74 @@ Audit findings, closed:
 - **P11.** The per-call `valid` (P10.4) and `m4raw/m4` (1.12x to 1.13x on sessions, P10.3) are unchanged by P10H.
 - **Batch API.** Keep `pruv_hb_` for callers that already hold a batch; it is not a performance lever while the body
   crosses the LLVM boundary.
+
+### P10H.6 req grid on synchronous facts (Rust backend)
+
+Kernels `bench/l3/hostfact/root.pruv` `rg_list(engine)` / `rg_open(engine, thread)` hold the bound lookup
+(`bound_in`, `cands`), list rows and the open read / cancel / race / create decisions; the host facts `rg_*`
+(`hostfact/host.rs`) only answer or record. Harness `hostfact/req_grid.rs` runs `req/hand/req.rs`
+`Requests::list` / `open` on the same world (`run.py --only grid`). Lanes, rotated every round: `hand`; `nocopy`
+(control: the hand decisions without the per-lookup `session_list().to_vec()`, REQ-B); `pruv`; `prefix` (hand with
+S=0, M=0, added to Pruv for the constant prefix the kernel does not port, REQ-PFX).
+
+Gates (rs/rust): row/open equality 36/36 cells, call counts 36/36 (list none: `session_list` M+1, `is_temporary`
+M*S), differential 2000/2000 seeded worlds (2000 list, 6000 open incl. cancelled and race), fresh query 1/1 (item 1
+binds only in the second observation; titles from observation 1), call order 2/2 (items, SL#1, per item SL#n, temp
+up to the match, row), host failure 5/5 (bad status, bad items, truncated field: -2 / -3, no panic), re-entry refusal
+2/2 (code 9, outer result intact). Existing `--only gates` 13/13 on rs/rust and rs/llvm.
+
+Timing: 9 rounds, median ns, 01:50 KST 2026-11-29, 1-min load 4.77-5.72, `/tmp/pruv-perf.lock`.
+Ratio = (Pruv + prefix) / hand; allowed ns/call = (hand - prefix) / (session_list + is_temporary calls) is the §3.2
+budget; Pruv ns/call = Pruv / calls. `tools/perf_gate.py`: PASS (36 cells, 0 fail, 0 debt). LLVM cells: pending
+(P17b/c), not measured.
+
+| cell | hand ns | nocopy ns | Pruv ns | prefix ns | Pruv+prefix / hand | calls (sl/temp) | allowed ns/call | Pruv ns/call | Pruv / nocopy |
+|---|---:|---:|---:|---:|---:|---|---:|---:|---:|
+| list S=1000 M=1 none | 422625 | 96583 | 33333 | 125 | 0.079 | 2/1000 | 421.7 | 33.3 | 0.35 |
+| list S=1000 M=1 first | 401667 | 71875 | 17958 | 83 | 0.045 | 2/1 | 133861.3 | 5986.0 | 0.25 |
+| list S=1000 M=1 last | 422500 | 95333 | 45709 | 125 | 0.108 | 2/1000 | 421.5 | 45.6 | 0.48 |
+| list S=1000 M=10 none | 3609292 | 304333 | 309834 | 166 | 0.086 | 11/10000 | 360.5 | 30.9 | 1.02 |
+| list S=1000 M=10 first | 3388292 | 74250 | 194042 | 125 | 0.057 | 11/55 | 51335.9 | 2940.0 | 2.61 |
+| list S=1000 M=10 last | 3647291 | 294250 | 440708 | 125 | 0.121 | 11/9955 | 366.0 | 44.2 | 1.50 |
+| list S=1000 M=50 none | 17785166 | 1236041 | 1526875 | 291 | 0.086 | 51/50000 | 355.3 | 30.5 | 1.24 |
+| list S=1000 M=50 first | 16855125 | 113333 | 867167 | 209 | 0.051 | 51/1275 | 12711.1 | 654.0 | 7.65 |
+| list S=1000 M=50 last | 18046666 | 1232666 | 2160792 | 417 | 0.120 | 51/48775 | 369.6 | 44.3 | 1.75 |
+| open S=1000 M=0 none | 697625 | 48834 | 59417 | 1000 | 0.087 | 2/2000 | 348.0 | 29.7 | 1.22 |
+| open S=1000 M=0 first | 325792 | 291 | 2042 | 959 | 0.009 | 1/1 | 162416.5 | 1021.0 | 7.02 |
+| open S=1000 M=0 last | 355083 | 23583 | 29959 | 959 | 0.087 | 1/1000 | 353.8 | 29.9 | 1.27 |
+| list S=5000 M=1 none | 2144583 | 461458 | 153250 | 125 | 0.072 | 2/5000 | 428.7 | 30.6 | 0.33 |
+| list S=5000 M=1 first | 2085166 | 345875 | 82042 | 125 | 0.039 | 2/1 | 695013.7 | 27347.3 | 0.24 |
+| list S=5000 M=1 last | 2140791 | 458958 | 214667 | 125 | 0.100 | 2/5000 | 428.0 | 42.9 | 0.47 |
+| list S=5000 M=10 none | 18229292 | 1484208 | 1460959 | 500 | 0.080 | 11/50000 | 364.5 | 29.2 | 0.98 |
+| list S=5000 M=10 first | 16965292 | 352334 | 783792 | 375 | 0.046 | 11/55 | 257044.2 | 11875.6 | 2.22 |
+| list S=5000 M=10 last | 17992792 | 1480917 | 2098541 | 542 | 0.117 | 11/49955 | 360.1 | 42.0 | 1.42 |
+| list S=5000 M=50 none | 93609750 | 6472083 | 7849750 | 1334 | 0.084 | 51/250000 | 374.4 | 31.4 | 1.21 |
+| list S=5000 M=50 first | 83132750 | 383792 | 3717166 | 583 | 0.045 | 51/1275 | 62693.9 | 2803.3 | 9.69 |
+| list S=5000 M=50 last | 101259500 | 6347500 | 12077208 | 1709 | 0.119 | 51/248775 | 406.9 | 48.5 | 1.90 |
+| open S=5000 M=0 none | 3743208 | 252708 | 316542 | 1875 | 0.085 | 2/10000 | 374.1 | 31.6 | 1.25 |
+| open S=5000 M=0 first | 1669208 | 1125 | 13292 | 2125 | 0.009 | 1/1 | 833541.5 | 6646.0 | 11.82 |
+| open S=5000 M=0 last | 1904417 | 154792 | 153583 | 5042 | 0.083 | 1/5000 | 379.8 | 30.7 | 0.99 |
+| list S=20000 M=1 none | 9832417 | 2416667 | 707708 | 1625 | 0.072 | 2/20000 | 491.5 | 35.4 | 0.29 |
+| list S=20000 M=1 first | 8882000 | 1767125 | 505375 | 1458 | 0.057 | 2/1 | 2960180.7 | 168458.3 | 0.29 |
+| list S=20000 M=1 last | 9464958 | 2160875 | 1156750 | 917 | 0.122 | 2/20000 | 473.2 | 57.8 | 0.54 |
+| list S=20000 M=10 none | 86232583 | 7454166 | 6637792 | 1917 | 0.077 | 11/200000 | 431.1 | 33.2 | 0.89 |
+| list S=20000 M=10 first | 77175458 | 1519667 | 5021334 | 1750 | 0.065 | 11/55 | 1169298.6 | 76080.8 | 3.30 |
+| list S=20000 M=10 last | 92180958 | 7788334 | 14020667 | 2500 | 0.152 | 11/199955 | 461.0 | 70.1 | 1.80 |
+| list S=20000 M=50 none | 437601458 | 28977875 | 38343917 | 1917 | 0.088 | 51/1000000 | 437.6 | 38.3 | 1.32 |
+| list S=20000 M=50 first | 418145125 | 1760583 | 26110875 | 2125 | 0.062 | 51/1275 | 315341.6 | 19691.5 | 14.83 |
+| list S=20000 M=50 last | 419312375 | 31849375 | 55527625 | 2000 | 0.132 | 51/998775 | 419.8 | 55.6 | 1.74 |
+| open S=20000 M=0 none | 18873208 | 1219459 | 1286167 | 3625 | 0.068 | 2/40000 | 471.7 | 32.2 | 1.05 |
+| open S=20000 M=0 first | 7644166 | 4959 | 74417 | 7792 | 0.011 | 1/1 | 3818187.0 | 37208.5 | 15.01 |
+| open S=20000 M=0 last | 8139875 | 627875 | 643542 | 5875 | 0.080 | 1/20000 | 406.7 | 32.2 | 1.02 |
+
+Verdict: the Rust gate passes against the hand baseline (0.009x-0.152x; Pruv 29-70 ns per call on call-bound cells
+against an allowed 348-492 ns, up to 1,000,000 `is_temporary` calls per list). This is not a structure-zero
+comparison: the hand deep-copies the session list per lookup (REQ-B), and Pruv copies and parses a packed `String`
+per fresh observation because a trusted fact cannot return a record list or a borrowed view (REQ-G6R, REQ-SNAP,
+REQ-TL). The nocopy control is faster than Pruv on most M >= 10 cells (Pruv / nocopy 0.89-1.90 on none/last, 2.2-15 on
+`first`, where Pruv still copies O(S) bytes for a match at session 0); cause: data representation, a language gap,
+not codegen. REQ-PORT stays blocked on (1) LLVM P17b / P17c and (2) REQ-SNAP: a borrowed or streamed host
+observation, after which the grid is gated against the nocopy hand. Rows: `bench/l3/req/RESHAPE.md` §3.
 
 ## Appendix P11 (import admission I0+I1, compiler list fix, writer preservation measured)
 

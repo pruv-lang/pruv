@@ -121,3 +121,161 @@ pub fn title_obs(s: i64) -> i64 {
     log(T_TITLE, s, 0);
     s + 1
 }
+
+// ---------------------------------------------------------------- req list/open grid (P10H)
+// World of the synchronous req facts: the packed session list (see root.pruv for the layout), the packed item list,
+// the host's isTemporary answers (by session index of the current list), and the recorded effects. A fresh
+// observation is a fresh copy of the current list; `set_rg_switch(k, list)` replaces the list after the k-th
+// observation (fresh-query gate). Counters always run; the trace only when on.
+pub const T_SL: i64 = 8; // rg_sessions (a = observation number, from 1)
+pub const T_RGTEMP: i64 = 9; // rg_is_temporary(i = a)
+pub const T_ITEMS: i64 = 10; // rg_items
+pub const T_ROW: i64 = 11; // rg_row(j = a, b = 1 bound / 0 none)
+pub const T_READ: i64 = 12; // rg_read
+pub const T_CANCEL: i64 = 13; // rg_cancelled
+pub const T_EXIST: i64 = 14; // rg_existing
+pub const T_CREATE: i64 = 15; // rg_create(turns = a)
+
+#[derive(Default)]
+pub struct RgWorld {
+    pub sessions: String,
+    pub switch_after: Option<(u64, String)>,
+    pub items: String,
+    pub temp: Vec<bool>,
+    pub read_turns: i64,
+    pub cancelled: bool,
+    pub sl_calls: u64,
+    pub temp_calls: u64,
+    /// (item index, bound session id, title)
+    pub rows: Vec<(i64, Option<String>, String)>,
+    pub existing: Option<String>,
+    pub created: Option<(String, i64)>,
+}
+
+thread_local! {
+    static RG: RefCell<RgWorld> = RefCell::new(RgWorld::default());
+    static RG_REENTER: Cell<Option<fn() -> i64>> = const { Cell::new(None) };
+}
+
+/// Appends a field (two length bytes, each < 128, then the bytes).
+pub fn pack_field(out: &mut String, s: &str) {
+    pack_count(out, s.len());
+    out.push_str(s);
+}
+/// Appends a count in the two-byte field-length encoding.
+pub fn pack_count(out: &mut String, n: usize) {
+    assert!(n < 16384, "packed field too long");
+    out.push(((n >> 7) as u8) as char);
+    out.push(((n & 127) as u8) as char);
+}
+
+pub fn rg_reset(sessions: String, items: String, temp: Vec<bool>, read_turns: i64) {
+    RG.with(|w| {
+        *w.borrow_mut() = RgWorld { sessions, items, temp, read_turns, ..RgWorld::default() };
+    });
+    RG_REENTER.with(|t| t.set(None));
+}
+pub fn set_rg_switch(after: u64, sessions: String) {
+    RG.with(|w| w.borrow_mut().switch_after = Some((after, sessions)));
+}
+pub fn set_rg_cancelled(v: bool) {
+    RG.with(|w| w.borrow_mut().cancelled = v);
+}
+/// Callback run (once, then cleared) inside the next rg_sessions; its return value is traced with T_REENTRY.
+pub fn set_rg_reenter(cb: Option<fn() -> i64>) {
+    RG_REENTER.with(|t| t.set(cb));
+}
+pub fn rg_take() -> RgWorld {
+    RG.with(|w| std::mem::take(&mut *w.borrow_mut()))
+}
+pub fn rg_counts() -> (u64, u64) {
+    RG.with(|w| {
+        let w = w.borrow();
+        (w.sl_calls, w.temp_calls)
+    })
+}
+/// Clears the recorded effects and counters, keeping the world (perf rounds).
+pub fn rg_clear_effects() {
+    RG.with(|w| {
+        let mut w = w.borrow_mut();
+        w.rows.clear();
+        w.existing = None;
+        w.created = None;
+        w.sl_calls = 0;
+        w.temp_calls = 0;
+    });
+}
+
+#[inline(never)]
+pub fn rg_sessions() -> String {
+    let n = RG.with(|w| {
+        let mut w = w.borrow_mut();
+        w.sl_calls += 1;
+        w.sl_calls
+    });
+    log(T_SL, n as i64, 0);
+    if let Some(cb) = RG_REENTER.with(|t| t.replace(None)) {
+        let r = cb();
+        log(T_REENTRY, r, 0);
+    }
+    RG.with(|w| {
+        let mut w = w.borrow_mut();
+        let out = w.sessions.clone();
+        if let Some((k, _)) = &w.switch_after {
+            if *k == n {
+                let (_, next) = w.switch_after.take().unwrap();
+                w.sessions = next;
+            }
+        }
+        out
+    })
+}
+
+#[inline(never)]
+pub fn rg_is_temporary(i: i64) -> bool {
+    log(T_RGTEMP, i, 0);
+    RG.with(|w| {
+        let mut w = w.borrow_mut();
+        w.temp_calls += 1;
+        w.temp.get(i as usize).copied().unwrap_or(false)
+    })
+}
+
+#[inline(never)]
+pub fn rg_items() -> String {
+    log(T_ITEMS, 0, 0);
+    RG.with(|w| w.borrow().items.clone())
+}
+
+#[inline(never)]
+pub fn rg_row(j: i64, sid: &str, so: i64, sl: i64, ttl: &str, to: i64, tl: i64) {
+    log(T_ROW, j, (sl >= 0) as i64);
+    let id = if sl < 0 { None } else { Some(sid[so as usize..(so + sl) as usize].to_string()) };
+    let title = ttl[to as usize..(to + tl) as usize].to_string();
+    RG.with(|w| w.borrow_mut().rows.push((j, id, title)));
+}
+
+#[inline(never)]
+pub fn rg_read(_thread: &str) -> i64 {
+    log(T_READ, 0, 0);
+    RG.with(|w| w.borrow().read_turns)
+}
+
+#[inline(never)]
+pub fn rg_cancelled() -> bool {
+    log(T_CANCEL, 0, 0);
+    RG.with(|w| w.borrow().cancelled)
+}
+
+#[inline(never)]
+pub fn rg_existing(sid: &str, so: i64, sl: i64) {
+    log(T_EXIST, 0, 0);
+    let id = sid[so as usize..(so + sl) as usize].to_string();
+    RG.with(|w| w.borrow_mut().existing = Some(id));
+}
+
+#[inline(never)]
+pub fn rg_create(thread: &str, turns: i64) {
+    log(T_CREATE, turns, 0);
+    RG.with(|w| w.borrow_mut().created = Some((thread.to_string(), turns)));
+}
