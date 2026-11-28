@@ -145,7 +145,8 @@ used by its bare name.
 | owned result `-> [u16]` | `void` plus a last `PruvArrayU16 *out` (`uint16_t *data`, `int64_t len`) | `-> Vec<u16>` |
 
 - Representation. Direct parameters and results use an LLVM integer of the declared width. On SysV (x86-64 Linux, aarch64 Apple) the 8- and
-  16-bit values carry `zeroext` (unsigned) or `signext` (signed) on both the call and the definition, as Clang emits;
+  16-bit values carry `zeroext` (unsigned) or `signext` (signed) on the `pruv_abi_*` definition, as Clang emits (the call
+  side belongs to the host's C compiler; Pruv emits no call to these wrappers);
   on WinX64 no such attribute is set and only the low bits of the declared width are used. Neither side assumes the
   whole 64-bit register is extended.
 - What is lifted. LLVM `codegen/small_int_unsupported` is lifted for the positions of the table only. A struct keeps the
