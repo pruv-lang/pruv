@@ -2254,6 +2254,7 @@ runtime|tests/runtime/r32.pruv	1 case: obl=12 1	default=bf0c30ac1ce6
 runtime|tests/runtime/r33.pruv	1 case: obl=9 1	default=f8adb0d5293f
 runtime|tests/runtime/r34_eval_order.pruv	1 case: obl=19 1	default=741f7970893b
 runtime|tests/runtime/r6b_4_rt_eq_range_str.pruv	1 case: obl=29 1	default=dcd502eea74e
+runtime|tests/runtime/r6e_25_deque_nested.pruv	1 case: obl=34 1	default=80817c4fc477
 runtime|tests/runtime/r6e_25_deque_window.pruv	1 case: obl=37 1	default=1a57c5b7eca1
 runtime|tests/runtime/refine_array_edges.pruv	1 case: obl=1 1	default=2c2379f8d76c
 runtime|tests/runtime/refine_edges.pruv	1 case: obl=1 1	default=d2fdd45c333a

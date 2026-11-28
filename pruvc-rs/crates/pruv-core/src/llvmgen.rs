@@ -7346,7 +7346,8 @@ impl<'a> FnGen<'a> {
                 let p = vec.slot(self, &lt, &index)?;
                 let slot = if pop {
                     let header = native_vec_header(deque);
-                    let vp = self.spill(&value)?;
+                    // the stored place itself (as `vec_clear`), not a copy of a nested field's header
+                    let vp = self.inout_place_ptr(&place.expr)?;
                     let head = vec.offset(self, "1")?;
                     let hp = g9_gep(self, header, &vp, 3)?;
                     self.ins(format!("store i64 {head}, ptr {hp}"))?;

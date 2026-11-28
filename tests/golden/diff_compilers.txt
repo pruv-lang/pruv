@@ -3164,8 +3164,10 @@ runtime|runtime/r34_eval_order [--no-verify]	2 cases: exit 2	llvm=65b08db3642f	r
 runtime|runtime/r34_eval_order [default]	2 cases: exit 2	llvm=c346b32ecfd3	rust=8b6b282962bd
 runtime|runtime/r6b_4_rt_eq_range_str [--no-verify]	2 cases: exit 2	llvm=8523f6bc94d1	rust=0c0d784165e4
 runtime|runtime/r6b_4_rt_eq_range_str [default]	2 cases: exit 2	llvm=aa0484a440ae	rust=6288e91866e4
-runtime|runtime/r6e_25_deque_window [--no-verify]	2 cases: exit 2	llvm=968553033db6	rust=7b4dc7015491
-runtime|runtime/r6e_25_deque_window [default]	2 cases: exit 2	llvm=70ad2502b9d6	rust=b715b701be42
+runtime|runtime/r6e_25_deque_nested [--no-verify]	2 cases: exit 2	llvm=4a25a36ee83b	rust=d4b38d8c488a
+runtime|runtime/r6e_25_deque_nested [default]	2 cases: exit 2	llvm=d46994473ca8	rust=ae5ce63c7cc8
+runtime|runtime/r6e_25_deque_window [--no-verify]	2 cases: exit 2	llvm=50e1bbab3b09	rust=7b4dc7015491
+runtime|runtime/r6e_25_deque_window [default]	2 cases: exit 2	llvm=bed38e54542d	rust=b715b701be42
 runtime|runtime/refine_array_edges [--no-verify]	2 cases: exit 2	llvm=af7f0527c6a9	rust=4455053220da
 runtime|runtime/refine_array_edges [--trust-callers]	2 cases: exit 2	llvm=4624e15b6d29	rust=745f11a112f0
 runtime|runtime/refine_array_edges [default]	2 cases: exit 2	llvm=af7f0527c6a9	rust=3f8679839493
