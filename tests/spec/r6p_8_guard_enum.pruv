@@ -1,0 +1,9 @@
+// spec: R-6p-8 accept
+pub enum Packet { Empty, Bytes(data: [u8]) }
+pub struct State { packet: Packet }
+pub fn packet_len(inout st: State) -> i64 {
+  match st.packet {
+    Packet::Empty => { return 0; }
+    Packet::Bytes(data) => { return len(data); }
+  }
+}

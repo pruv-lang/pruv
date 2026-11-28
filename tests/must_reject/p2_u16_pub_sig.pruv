@@ -1,4 +1,4 @@
-// P12a: [u16] at the host boundary runs on the Rust backend; the LLVM host boundary is a later P12 bundle
-pub fn f(a: [u16]) -> i64 {
+// P12d: a read [u16] has an LLVM host layout; an inout [u16] does not
+pub fn f(inout a: [u16]) -> i64 {
   return len(a);
 }

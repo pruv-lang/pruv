@@ -1,0 +1,20 @@
+{
+  "gen_contains": [
+    "pub fn packet_len(st: &mut State) -> i64 {\n    if let Packet::Bytes(pruv_field_0) = &st.packet { if (pruv_field_0.len() as u64) > (1u64 << 40) { panic!(\"pruv: invalid representation: {} (array length)\", pruv_field_0.len()); } }\n    packet_len__pruv_body(st)"
+  ],
+  "run": {
+    "backends": [
+      "rust"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "packet bytes: 3"
+    ]
+  }
+}

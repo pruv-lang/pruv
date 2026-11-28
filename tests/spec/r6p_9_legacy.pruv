@@ -1,0 +1,2 @@
+// spec: R-6p-9 accept
+fn byte(x: u8) -> u8 { return x; }

@@ -144,5 +144,29 @@
     "same_opt(Some(true), Some(true))", "same_opt(Some(false), Some(false))", "same_opt(None, None)",
     "same_res(Ok(true), Ok(true))", "same_res(Err(5), Err(5))", "same_res(Err(i64::MIN), Err(i64::MIN))",
     {"repeat": "same_res", "args": "Err(i), Err(i)", "n": 20000}
+  ],
+  "p12d_narrow.pruv": [
+    "id_u8(u8::MIN)",
+    "id_u8(u8::MAX)",
+    "id_u16(u16::MIN)",
+    "id_u16(u16::MAX)",
+    "id_u32(u32::MIN)",
+    "id_u32(u32::MAX)",
+    "id_u64(u64::MIN)",
+    "id_u64(u64::MAX)",
+    "id_usize(usize::MIN)",
+    "id_usize(usize::MAX)",
+    "id_i8(i8::MIN)",
+    "id_i8(i8::MAX)",
+    "id_i16(i16::MIN)",
+    "id_i16(i16::MAX)",
+    "id_i32(i32::MIN)",
+    "id_i32(i32::MAX)",
+    "id_isize(isize::MIN)",
+    "id_isize(isize::MAX)",
+    "positive(u64::MAX)",
+    "round_trip(sol::Mixed { a: 255, b: -32768, c: u64::MAX })",
+    "units(255, -1, u64::MAX, &[])",
+    "units(255, -1, u64::MAX, &[0xD800, 0xFFFF])"
   ]
 }

@@ -64,20 +64,35 @@ pub fn is_user_key(t: &str) -> bool {
     !is_g3_key(t) && !crate::intwidth::is_narrow(t) && is_user_type(t)
 }
 
-pub(crate) const SMALL_INT_HOST_MESSAGE: &str = "integer types other than i64 and [u16] at the LLVM host boundary are a later P12 bundle (the Rust backend has them since P12a)";
-pub(crate) const SMALL_INT_HOST_ERROR: &str = "small_int_unsupported: integer types other than i64 and [u16] at the LLVM host boundary are a later P12 bundle (the Rust backend has them since P12a)";
+pub(crate) const SMALL_INT_HOST_MESSAGE: &str = "unsupported host integer or buffer position (including take/inout [u16] and buffer fields); foreign widths await P12h and narrow payloads await P11";
+pub(crate) const SMALL_INT_HOST_ERROR: &str = "small_int_unsupported: unsupported host integer or buffer position (including take/inout [u16] and buffer fields); foreign widths await P12h and narrow payloads await P11";
 
 /// A narrow integer or fixed-length array, directly in the signature or inside a nominal type.
 pub(crate) fn has_narrow_scalar_sig(f: &Function, tt: &TypeTable) -> bool {
     has_int_sig(f, tt, false)
 }
 
-/// LLVM also excludes u16 buffers.
+/// Scalar widths, struct integer fields and read/result u16 buffers have an LLVM host layout.
 pub(crate) fn has_llvm_unsupported_int_sig(f: &Function, tt: &TypeTable) -> bool {
-    has_int_sig(f, tt, true)
+    fn unsupported(ty: &str, tt: &TypeTable, seen: &mut std::collections::HashSet<String>) -> bool {
+        if let Some(width) = crate::intwidth::of(ty) {
+            return width.is_char();
+        }
+        if let Some(TypeDecl::Struct(s)) = tt.decl(ty) {
+            return seen.insert(ty.into()) && s.fields.iter().any(|field| unsupported(&field.ty, tt, seen));
+        }
+        has_narrow(tt, ty, &mut Default::default(), true)
+    }
+    let mut seen = Default::default();
+    (f.ret != "array_u16" && unsupported(&f.ret, tt, &mut seen))
+        || f.params.iter().any(|p| if p.ty == "array_u16" {
+            p.take || p.mode_pos.is_some()
+        } else {
+            unsupported(&p.ty, tt, &mut seen)
+        })
 }
 
-fn has_int_sig(f: &Function, tt: &TypeTable, include_u16_buffers: bool) -> bool {
+pub(crate) fn has_int_sig(f: &Function, tt: &TypeTable, include_u16_buffers: bool) -> bool {
     let mut seen = std::collections::HashSet::new();
     std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty))
         .any(|ty| has_narrow(tt, ty, &mut seen, include_u16_buffers))

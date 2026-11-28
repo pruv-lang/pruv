@@ -1141,6 +1141,7 @@
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_local_view.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_two_sources.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_13_iw_whole.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_9_narrow.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--trust-callers", "--contract-budget", "1000"], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r21_contract_size_pass.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--trust-callers", "--foreign-checks", "off"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r19_requires_off.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": ["--trust-callers"], "group": "examples", "mode": "trust-callers", "sample": "examples/bsearch.pruv"}
@@ -2074,6 +2075,8 @@
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_local_view.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_two_sources.pruv"}
 {"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_13_iw_whole.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_9_legacy.pruv"}
+{"backend": "llvm", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_9_narrow.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--contract-budget", "1000"], "group": "runtime", "mode": null, "sample": "tests/runtime/g3_r22_contract_budget.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--contract-budget", "1000"], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r21_contract_size_pass.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--contract-budget", "1000"], "group": "runtime", "mode": null, "sample": "tests/runtime/p3_f1_budget.pruv"}
@@ -3251,6 +3254,9 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_requires_elem.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_requires_range.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_requires_unguarded.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_8_guard_enum.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_8_guard_hashmap.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_8_guard_recursive.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_8_owned.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_8_requires.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--proven-entries"], "group": "runtime", "mode": null, "sample": "tests/runtime/p9b_rt_proven.pruv"}
@@ -4218,12 +4224,16 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_requires.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_requires_elem.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_requires_range.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_8_guard_enum.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_8_guard_hashmap.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_8_guard_recursive.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_8_owned.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_8_requires.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "/tmp/pruv_p1_pub_sig_bindings.rs"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_pub_sig.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "/tmp/pruv_p2_u16_pub_sig_bindings.rs"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_u16_pub_sig.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "/tmp/pruv_p6_llvm_owned_bindings.rs"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p6_llvm_owned.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "r6p_8_rejected_bindings.rs"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/r6p_8_llvm.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "obj", "--manifest", "tests/must_reject/r6p_9_raw_manifest.json"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/r6p_9_raw_u8.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "obj"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_scalar_i32.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "obj"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p12b_llvm_tuple.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--emit", "exe"], "group": "g8_frontend", "mode": "exe", "only_compiler": "rs", "sample": "tests/g8/frontend/catalog/root.pruv"}

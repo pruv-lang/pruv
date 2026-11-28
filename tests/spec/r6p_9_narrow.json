@@ -1,0 +1,26 @@
+{
+  "backend": "llvm",
+  "run": {
+    "backends": [
+      "llvm"
+    ],
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [],
+    "ll_contains": [
+      "define zeroext i8 @pruv_abi_id_u8(i8 zeroext",
+      "define signext i16 @pruv_abi_id_i16(i16 signext",
+      "@pruv_shrink_v2(ptr %x0r, i64 %x2, i64 %x1, i64 2, i64 2)",
+      "@pruv_overlap(ptr %a.bytes.a, i64 %a.bytes.n, i64 1, ptr %a.sid.a, i64 %a.sid.n, i64 2)"
+    ],
+    "bindings_contains": [
+      "sid: &[u16]",
+      "::std::vec::Vec<u16>"
+    ]
+  }
+}

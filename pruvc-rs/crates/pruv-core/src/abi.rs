@@ -117,7 +117,7 @@ impl<'a> Words<'a> {
     /// active (an inactive one reads zero).
     pub fn de(&mut self, ty: &str, ptr: &str, off: usize, act: Option<&str>) -> R<String> {
         if crate::intwidth::is_narrow(ty) {
-            return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+            return self.de_new(ty, ptr, off, act);
         }
         let tt = self.tt;
         if is_new_app(ty) {
@@ -187,7 +187,9 @@ impl<'a> Words<'a> {
     /// `checks`; the wrapper rejects before requires/body).
     pub fn de_new(&mut self, ty: &str, ptr: &str, off: usize, act: Option<&str>) -> R<String> {
         if crate::intwidth::is_narrow(ty) {
-            return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+            let word = self.de_new("i64", ptr, off, act)?;
+            let t = lty(ty);
+            return Ok(if t == "i64" { word } else { self.op(format!("trunc i64 {} to {}", word, t)) });
         }
         let tt = self.tt;
         let on = act.is_some();
@@ -315,7 +317,11 @@ impl<'a> Words<'a> {
     /// the tag is set, a Result error word when it is not, an enum payload when the tag selects its variant.
     pub fn ser_new(&mut self, ty: &str, x: &str, ptr: &str, off: usize, act: Option<&str>) -> R<()> {
         if crate::intwidth::is_narrow(ty) {
-            return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+            let width = crate::intwidth::of(ty).unwrap();
+            let word = if width.bits == 64 { x.to_string() } else {
+                self.op(format!("{} {} {} to i64", if width.signed { "sext" } else { "zext" }, width.llvm(), x))
+            };
+            return self.ser_new("i64", &word, ptr, off, act);
         }
         let tt = self.tt;
         if ty == "unit" {
@@ -427,7 +433,7 @@ impl<'a> Words<'a> {
     /// also when it hangs below a legacy struct/enum (`act`: whether that legacy value is active).
     pub fn ser(&mut self, ty: &str, x: &str, ptr: &str, off: usize, act: Option<&str>) -> R<()> {
         if crate::intwidth::is_narrow(ty) {
-            return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+            return self.ser_new(ty, x, ptr, off, act);
         }
         let tt = self.tt;
         if is_new_app(ty) {
@@ -522,6 +528,11 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
     if crate::llvmgen::has_ext_sig(f, tt) || (crate::llvmgen::has_inout(f) && !m.explicit) {
         return Err(format!("llvmgen: {} has no host ABI wrapper (inout or extended signature)", f.name));
     }
+    let extension = |ty: &str| match (target, ty) {
+        (AbiTarget::SysV, "u8" | "u16") => "zeroext",
+        (AbiTarget::SysV, "i8" | "i16") => "signext",
+        _ => "",
+    };
     let n = mangle(&f.name);
     let mut ext: Vec<String> = Vec::new();
     let mut pre: Vec<String> = Vec::new();
@@ -547,9 +558,11 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
             let x = w.de(&p.ty, &format!("%a.{}", q), 0, None)?;
             args.push(format!("{} {}", lty(&p.ty), x));
             pre.extend(w.lines.drain(..));
-        } else if p.ty == "i64" {
-            ext.push(format!("i64 %a.{}", q));
-            args.push(format!("i64 %a.{}", q));
+        } else if let Some(width) = crate::intwidth::of(&p.ty) {
+            let arg = format!("{} %a.{}", width.llvm(), q);
+            let attr = extension(&p.ty);
+            ext.push(if attr.is_empty() { arg.clone() } else { format!("{} {} %a.{}", width.llvm(), attr, q) });
+            args.push(arg);
         } else if p.ty == "bool" {
             ext.push(format!("i64 %a.{}", q));
             pre.push(format!("%c.{} = icmp ne i64 %a.{}, 0", q, q));
@@ -575,7 +588,7 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
             let q = mangle(&p.name);
             let io = p.mode_pos.is_some();
             if is_array_name(&p.ty) || p.ty == "str" {
-                let eb = if p.ty == "array_u8" || p.ty == "array_bool" || p.ty == "str" { 1 } else { 8 };
+                let eb = if p.ty == "array_u8" || p.ty == "array_bool" || p.ty == "str" { 1 } else if p.ty == "array_u16" { 2 } else { 8 };
                 ptrs.push((format!("%a.{}.a", q), format!("%a.{}.n", q), eb, io));
             } else if is_agg(&p.ty) {
                 ptrs.push((format!("%a.{}", q), (words(tt, &p.ty)? * 8).to_string(), 1, io));
@@ -637,6 +650,7 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
     // one compare on the OR of the lengths (a negative length sets the top bit); only when it fails are the lengths
     // checked one by one, in parameter order, and a slow path that finds none above 2^40 (one is exactly 2^40) goes on.
     // `str length` keeps the old negative-length text.
+    let overlap = if crate::emit_common::has_u16_buffer_sig(f) { std::mem::take(&mut body) } else { Vec::new() };
     let lps: Vec<&Param> = f.params.iter().filter(|p| is_array_name(&p.ty) || p.ty == "str").collect();
     if lps.len() > 1 {
         let mut acc = format!("%a.{}.n", mangle(&lps[0].name));
@@ -664,6 +678,7 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
         body.push("  br label %len.ok".to_string());
         body.push("len.ok:".to_string());
     }
+    body.extend(overlap);
     body.extend(pre.iter().map(|x| format!("  {}", x)));
     for (k, (okv, wv, tname)) in w.checks.iter().enumerate() {
         // G3: an invalid nominal enum ordinal is rejected here, before the entry (requires) and the body run
@@ -675,6 +690,7 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
         body.push("  unreachable".to_string());
         body.push(format!("enum.ok{}:", k));
     }
+    let scalar_ret;
     let ret: &str;
     if is_array_name(rt) || rt == "str" {
         ext.push("ptr %out".to_string());
@@ -686,6 +702,8 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
         // truncate has cap != len; the cap is a runtime value here, so pruv_shrink_v2 runs only when cap != len)
         let sz = if rt == "array_u8" || rt == "array_bool" || rt == "str" {
             1
+        } else if rt == "array_u16" {
+            2
         } else {
             crate::storage::elem_size(m.storage.layout_of(f))
         };
@@ -745,9 +763,11 @@ pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mo
         body.push("  ret i64 %rz".to_string());
         ret = "i64";
     } else {
-        body.push(format!("  %r = call i64 {}({})", entry, argl));
-        body.push("  ret i64 %r".to_string());
-        ret = "i64";
+        let t = lty(rt);
+        body.push(format!("  %r = call {} {}({})", t, entry, argl));
+        body.push(format!("  ret {} %r", t));
+        scalar_ret = format!("{} {}", extension(rt), t);
+        ret = scalar_ret.trim_start();
     }
     let mut out = format!("define {} @pruv_abi_{}({}) {{\nentry:\n{}\n}}\n", ret, n, ext.join(", "), body.join("\n"));
     if f.params.iter().any(|p| p.ty == "array_bool" || p.ty == "str") {

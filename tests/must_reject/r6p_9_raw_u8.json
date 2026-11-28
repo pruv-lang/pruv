@@ -1,0 +1,1 @@
+{"stage":"codegen","code":"small_int_unsupported","flags":["--backend","llvm","--emit","obj","--manifest","tests/must_reject/r6p_9_raw_manifest.json"]}

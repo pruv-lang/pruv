@@ -1,0 +1,28 @@
+pub fn id_u8(x: u8) -> u8 { return x; }
+pub fn id_u16(x: u16) -> u16 { return x; }
+pub fn id_u32(x: u32) -> u32 { return x; }
+pub fn id_u64(x: u64) -> u64 { return x; }
+pub fn id_usize(x: usize) -> usize { return x; }
+pub fn id_i8(x: i8) -> i8 { return x; }
+pub fn id_i16(x: i16) -> i16 { return x; }
+pub fn id_i32(x: i32) -> i32 { return x; }
+pub fn id_isize(x: isize) -> isize { return x; }
+
+pub fn positive(x: u64) -> u64 requires x > 0 { return x; }
+
+pub struct Mixed { a: u8, b: i16, c: u64 }
+pub fn round_trip(p: Mixed) -> Mixed { return p; }
+
+pub fn length(sid: [u16]) -> i64 { return len(sid); }
+pub fn units(a: u8, b: i16, c: u64, sid: [u16]) -> [u16] ! alloc {
+  let mut result_buf: [u16] = copy(sid);
+  arr_reserve(inout result_buf, 4);
+  return move result_buf;
+}
+
+pub fn checked_length(inout bytes: [u8], sid: [u16]) -> i64 ! io
+  requires len(sid) > 0 && sid[0] > 0
+{
+  print(123);
+  return len(bytes);
+}
