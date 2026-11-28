@@ -425,6 +425,9 @@ by byte-identical output and run by group, with the full test suite once before 
       the plain bit (1 = no backslash) on kind 4/7 records, as `json::check_tape` allows; `run_q.py` still expected 0.
       The oracle now expects the plain bit for strings and keys, and the py pairs run only with `--vs-py`
       (`run_a3.COMPILER_SET`). rs/rust and rs/llvm: 20213 cases, 0 mismatches; rc 0.
+    - HC-12 `bench/l3/claude/q_mutants.py` exits 1: mutants 1, 5, 9-12, 17 and 18 are stale (their source snippet
+      no longer exists at HEAD), so they test nothing. Re-anchor each to the current source or drop it with a reason;
+      a stale mutant must fail the run loudly but must not hide the others. Found in HC-11 (mutant 19 is fine).
     Recorded, not queued yet: LLVM `par` per-thread 64 KiB block cache not returned at thread exit
     (`pruvc/runtime.c:208`, `parallel_shim.rs:34`), measure under repeated `par` before a row; trusted
     declarations 7 -> 42 in 14 days (26 in budget), counted at every broad check; uncalled
