@@ -1,0 +1,18 @@
+{
+  "gen_contains": [
+    "fn failure<'a>(k: i64) -> Parse<'a>"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "1063"
+    ],
+    "alloc_balance": true
+  }
+}

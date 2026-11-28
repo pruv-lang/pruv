@@ -263,6 +263,8 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
                     return Err(signature(e.line(), e.col()));
                 }
             }
+            // 4.4zh-FL: an empty from() list declares a borrowing-enum result that holds no loans (a free lifetime).
+            Some(names) if names.is_empty() && permitted && enums.contains(&f.ret) => {}
             None if !borrowed_result => {}
             _ => return Err(signature(f.line, f.col)),
         }

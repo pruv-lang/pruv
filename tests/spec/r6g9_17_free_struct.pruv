@@ -1,0 +1,7 @@
+// spec: R-6g9-17 reject
+// 4.4zh-FL: an empty from() list is allowed only for a borrowing-enum result, not a borrowing struct.
+struct Doc { source: ref [u8], tape: [i64] }
+fn bad(data: [u8]) -> Doc from() ! alloc {
+  let t: [i64] = alloc(1, 9);
+  return Doc { source: subview(data, 0, len(data)), tape: move t };
+}

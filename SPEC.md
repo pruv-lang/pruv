@@ -2364,7 +2364,10 @@ borrowed value is live.
     intrinsics, so a wrapped total cannot pass the bound check (LG7-B1).
 - R-6g9-17 **Borrowing enums (4.4zg-LB, L-gaps 30).** A non-generic enum with a variant field of borrowing
   struct type carries its lifetime (Rust `enum E<'a>`). An immutable local or an internal non-generic read
-  parameter may hold it. A result requires a nonempty `from` list, even for a unit variant. A constructor inherits
+  parameter may hold it. A result requires a `from` list, even for a unit variant. The list may be empty (`from()`,
+  4.4zh-FL): the result then holds no loans (Rust `fn f<'a>(..) -> E<'a>`, a free lifetime), so a returned value that
+  holds any loan is `type/borrow_escape` and a call of it holds none; a missing `from` and an empty `from()` on any
+  other borrowing result (a borrowing struct or a `ref`) stay `type/borrow_signature`. A constructor inherits
   the sources and access modes of its borrowing payloads; scalar and unit variants carry no loans. A call inherits
   the union of its declared arguments' sources. Returning any other source is `type/borrow_escape`.
   Each borrowing match binder holds the scrutinee's loans through its own last use. A binder's owned buffer
@@ -2374,8 +2377,8 @@ borrowed value is live.
   nesting borrowing enums in records or enums, containers, generic arguments, host or extern boundaries,
   `par`, `let mut`, `inout`, `take` and partial moves from the borrowing binder are `type/borrow_signature`.
   Tests: [conversion](tests/spec/r6g9_2_enum_payload.pruv), [exit paths](tests/spec/r6g9_17_exit_drop.pruv),
-  [binder liveness](tests/spec/r6g9_17_binder_live.pruv), [invalid document](tests/spec/r6g9_17_bad_doc.pruv);
-  rejects: [escape](tests/spec/r6g9_17_escape.pruv), [tape escape](tests/spec/r6g9_17_tape_escape.pruv), [no from](tests/spec/r6g9_17_no_from.pruv), [mut](tests/spec/r6g9_17_mut.pruv), [inout](tests/spec/r6g9_17_inout.pruv), [vec](tests/spec/r6g9_17_vec.pruv), [nested](tests/spec/r6g9_17_nested.pruv), [partial move](tests/spec/r6g9_17_partial_move.pruv), [partial source](tests/spec/r6g9_17_partial_source.pruv), [partial param](tests/spec/r6g9_17_partial_param.pruv), [read move](tests/spec/r6g9_17_read_move.pruv), [use after move](tests/spec/r6g9_17_use_after_move.pruv).
+  [binder liveness](tests/spec/r6g9_17_binder_live.pruv), [invalid document](tests/spec/r6g9_17_bad_doc.pruv), [free result](tests/spec/r6g9_17_free_result.pruv);
+  rejects: [escape](tests/spec/r6g9_17_escape.pruv), [tape escape](tests/spec/r6g9_17_tape_escape.pruv), [no from](tests/spec/r6g9_17_no_from.pruv), [free result escape](tests/spec/r6g9_17_free_escape.pruv), [free struct](tests/spec/r6g9_17_free_struct.pruv), [mut](tests/spec/r6g9_17_mut.pruv), [inout](tests/spec/r6g9_17_inout.pruv), [vec](tests/spec/r6g9_17_vec.pruv), [nested](tests/spec/r6g9_17_nested.pruv), [partial move](tests/spec/r6g9_17_partial_move.pruv), [partial source](tests/spec/r6g9_17_partial_source.pruv), [partial param](tests/spec/r6g9_17_partial_param.pruv), [read move](tests/spec/r6g9_17_read_move.pruv), [use after move](tests/spec/r6g9_17_use_after_move.pruv).
 - R-6g9-18 **Lists of borrowing structs (4.4zh-VB, P11-zh).** For a borrowing struct `B` (not a borrowing enum), a
   non-generic function body (a host function's body too; only signatures are limited) may declare
   `let mut v: Vec<B> = vec_new::<B>()` (exactly this initializer; `vec_new::<B>()` anywhere else is
