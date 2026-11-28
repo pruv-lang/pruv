@@ -1165,7 +1165,8 @@ fn tree_count(t: Tree) -> i64
   `vec_pop_front::<S>(inout P) -> Option<S>` moves the first element out of a mutable deque place
   under R-6e-4 and R-6e-7. An overlapping active borrow is `type/recursive_borrow`. The call needs
   no `alloc` effect and is permitted only as the direct scrutinee of a `match` statement
-  (`type/foreign_contract` elsewhere). `Some(d)` binds an owned mutable local, which may be changed in
+  whose arms have no guard (`type/foreign_contract` elsewhere, including `if let` and a guarded
+  `match`; `?` needs a `Result` operand and is `type/try_operand`). `Some(d)` binds an owned mutable local, which may be changed in
   place, passed `inout` or moved back into the deque. When the pre-call length is zero, the result is
   `None` and the deque is unchanged. Otherwise the result is `Some(old(P)[0])`, the length decreases
   by one, and `P[i] == old(P)[i + 1]` at each index in the new range.

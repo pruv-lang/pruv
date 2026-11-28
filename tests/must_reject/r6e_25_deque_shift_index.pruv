@@ -1,0 +1,11 @@
+struct Draft { id: i64 }
+
+fn bad(inout q: VecDeque<Draft>) -> i64
+  requires len(q) == 2
+{
+  match vec_pop_front::<Draft>(inout q) {
+    Some(d) => { }
+    None => { }
+  }
+  return vec_get::<Draft>(q, 1).id;
+}

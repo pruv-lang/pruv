@@ -1694,9 +1694,16 @@ must_reject|must_reject/p9b_call_requires.pruv	2 cases: exit 2	llvm=9a6d17225d72
 must_reject|must_reject/p9b_false_ensures.pruv	2 cases: exit 2	llvm=93d55cbda7f8	rust=93d55cbda7f8
 must_reject|must_reject/p9b_take_use.pruv	2 cases: exit 2	llvm=47303e2e629b	rust=47303e2e629b
 must_reject|must_reject/p9b_unknown_method.pruv	2 cases: exit 2	llvm=b7e7a6ffcfe9	rust=b7e7a6ffcfe9
+must_reject|must_reject/r6e_25_deque_empty_some.pruv	2 cases: exit 2	llvm=cb2644558b0e	rust=cb2644558b0e
 must_reject|must_reject/r6e_25_deque_ensures.pruv	2 cases: exit 2	llvm=a5f950db9b1b	rust=a5f950db9b1b
+must_reject|must_reject/r6e_25_deque_guard.pruv	2 cases: exit 2	llvm=88f1e056b0ca	rust=88f1e056b0ca
+must_reject|must_reject/r6e_25_deque_iflet.pruv	2 cases: exit 2	llvm=2ce233b14d3e	rust=2ce233b14d3e
 must_reject|must_reject/r6e_25_deque_index.pruv	2 cases: exit 2	llvm=6bf83cdddf7b	rust=6bf83cdddf7b
 must_reject|must_reject/r6e_25_deque_let.pruv	2 cases: exit 2	llvm=03e74f82e61a	rust=03e74f82e61a
+must_reject|must_reject/r6e_25_deque_readonly.pruv	2 cases: exit 2	llvm=02f089933095	rust=02f089933095
+must_reject|must_reject/r6e_25_deque_scalar.pruv	2 cases: exit 2	llvm=0b5348c71279	rust=0b5348c71279
+must_reject|must_reject/r6e_25_deque_second.pruv	2 cases: exit 2	llvm=142e92556e71	rust=142e92556e71
+must_reject|must_reject/r6e_25_deque_shift_index.pruv	2 cases: exit 2	llvm=c855f05a3a4a	rust=c855f05a3a4a
 must_reject|must_reject/r6e_25_deque_vec.pruv	2 cases: exit 2	llvm=bfd6628e757e	rust=bfd6628e757e
 must_reject|must_reject/refine_alloc_len.pruv	2 cases: exit 2	llvm=91183d4f0e90	rust=91183d4f0e90
 must_reject|must_reject/refine_base_bool.pruv	2 cases: exit 2	llvm=345aab8fdc3a	rust=345aab8fdc3a
