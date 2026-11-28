@@ -1,0 +1,9 @@
+{
+  "run": {
+    "backends": ["rust"],
+    "exit": 101,
+    "flags_matrix": [[], ["--no-verify"]],
+    "stdout_lines": ["7"],
+    "stderr_contains": "pruv: requires violated: crate::after_mark: (i64(sid[i]) == 55296)"
+  }
+}

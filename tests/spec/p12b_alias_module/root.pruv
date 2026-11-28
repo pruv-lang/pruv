@@ -1,0 +1,7 @@
+// spec: R-6p-7 accept
+mod a;
+pub fn value(x: i64) -> i64 {
+  let v: crate::a::Code = x;
+  let r: crate::a::Res<i64> = crate::a::wrap(v);
+  match r { Ok(n) => { return n; } Err(e) => { return e.value; } }
+}

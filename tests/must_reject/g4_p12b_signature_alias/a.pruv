@@ -1,0 +1,4 @@
+// spec: R-6p-7 reject
+struct Hidden { x: i64 }
+type A = Hidden;
+pub fn f(x: A) -> i64 { return x.x; }

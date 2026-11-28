@@ -975,6 +975,17 @@ impl<'a> Mono<'a> {
     // ---------- driver ----------
     fn run(mut self) -> MR<SpecPlan> {
         let prog = self.prog;
+        // A tuple's Rust spelling embeds the lowered component types, including generic specializations.
+        if self.g4.is_some() {
+            let mut tuples: Vec<_> = prog.types.iter().filter_map(|d|
+                crate::gtype::tuple_components(d.name()).map(|cs| (d.name(), cs))).collect();
+            // Each nested tuple key is shorter than its enclosing tuple key.
+            tuples.sort_by_key(|(name, _)| name.len());
+            for (name, keys) in tuples {
+                let components = keys.iter().map(|k| self.ty_g(&GType::from_key(k))).collect::<MR<Vec<_>>>()?;
+                self.rtypes.insert(name.to_string(), crate::gtype::tuple_name(&components));
+            }
+        }
         let mut plain_types: Vec<(usize, TypeDecl)> = Vec::new();
         for (i, d) in prog.types.iter().enumerate() {
             if !d.tparams().is_empty() || self.tindex.get(d.name()) != Some(&i) {

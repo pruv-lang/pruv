@@ -1448,7 +1448,7 @@ def examples_jobs(backend):
 def runtime_src(j, t):
     """the compiler input of a runtime spec: tests/runtime/T.pruv, or root.pruv of a G4 project (spec.json)"""
     d = os.path.dirname(j)
-    return os.path.join(d, "root.pruv") if os.path.basename(j) == "spec.json" else os.path.join(d, t + ".pruv")
+    return os.path.join(d, "root.pruv") if os.path.basename(j) in ("spec.json", "root.json") else os.path.join(d, t + ".pruv")
 
 
 def runtime_job(j, t, spec, flags, name, suffix, llvm):
@@ -1456,8 +1456,9 @@ def runtime_job(j, t, spec, flags, name, suffix, llvm):
 
     def fn():
         d = os.path.dirname(j)
-        proj = os.path.basename(j) == "spec.json"      # G4 A2 project: root.pruv + modules + main.rs + spec.json
-        pruv, drv = (os.path.join(d, "root.pruv"), os.path.join(d, "main.rs")) if proj else \
+        proj = os.path.basename(j) in ("spec.json", "root.json")  # project: root.pruv + modules + main.rs/root.rs
+        main = "root.rs" if os.path.basename(j) == "root.json" else "main.rs"   # tests/spec/NAME/ uses root.rs
+        pruv, drv = (os.path.join(d, "root.pruv"), os.path.join(d, main)) if proj else \
             (os.path.join(d, t + ".pruv"), os.path.join(d, t + ".rs"))
         if "--no-verify" in flags and "--trust-callers" in flags and spec.get("trust_driver"):
             drv = os.path.join(d, spec.get("trust_driver_llvm", spec["trust_driver"]) if llvm else spec["trust_driver"])
@@ -1645,10 +1646,13 @@ def runtime_jobs(backend):
     # Flat rule-traced fixtures may also supply a runtime spec and a Rust driver.
     specs += [(j, os.path.splitext(os.path.basename(j))[0])
               for j in sorted(glob.glob(os.path.join(ROOT, "tests/spec/*.json")))]
+    # Rule-traced project fixtures tests/spec/NAME/root.json with a Rust driver root.rs.
+    specs += [(j, os.path.basename(os.path.dirname(j)))
+              for j in sorted(glob.glob(os.path.join(ROOT, "tests/spec/*/root.json")))]
     for j, t in specs:
         try:
             spec = json.load(open(j, encoding="utf-8"))
-            if os.path.dirname(j) == os.path.join(ROOT, "tests/spec"):
+            if os.path.dirname(j) == os.path.join(ROOT, "tests/spec") or os.path.basename(j) == "root.json":
                 if "run" not in spec:
                     continue
                 spec = spec["run"]

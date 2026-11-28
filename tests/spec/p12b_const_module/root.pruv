@@ -1,0 +1,5 @@
+// spec: R-6p-7 accept
+mod a;
+mod b;
+pub fn first(x: i64) -> i64 requires x == crate::a::LIMIT { return crate::a::LIMIT; }
+pub fn second() -> i64 { return crate::b::LIMIT; }

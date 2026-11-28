@@ -1,0 +1,11 @@
+// spec: R-6p-7 accept
+mod a;
+pub fn f(x: i64) -> i64 {
+  let mut r: i64 = 0;
+  if x == crate::a::LIMIT {}
+  if x == crate::a::LIMIT { r = 1; }
+  let mut i: i64 = 0;
+  while i < crate::a::LIMIT invariant i <= crate::a::LIMIT decreases crate::a::LIMIT - i { i = i + 1; }
+  let v: i64 = if x == crate::a::LIMIT { 2 } else { 3 };
+  return r + i + v;
+}

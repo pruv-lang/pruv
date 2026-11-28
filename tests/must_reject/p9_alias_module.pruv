@@ -1,2 +1,2 @@
-pub type N = i64;
-pub fn f(x: N) -> N { return x; }
+// spec: R-6v-1 reject
+pub type N = N;

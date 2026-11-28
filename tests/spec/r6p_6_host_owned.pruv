@@ -1,0 +1,10 @@
+// spec: R-6p-6 accept
+// P12a follow-up: an owned [u16] result is a Vec<u16> (from a take parameter or copy())
+pub fn keep(take s: [u16]) -> [u16]
+{
+  return move s;
+}
+pub fn dup(s: [u16]) -> [u16] ! alloc
+{
+  return copy(s);
+}

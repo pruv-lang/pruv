@@ -1,0 +1,7 @@
+// spec: R-6p-7 reject
+mod a;
+struct Pair { value: i64 }
+pub fn value(x: i64) -> i64 {
+  let local: (Pair, i64) = (Pair { value: x }, x);
+  return crate::a::first(local);
+}

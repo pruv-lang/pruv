@@ -1,0 +1,7 @@
+// spec: R-6p-6 accept
+// P12a follow-up: a host-entry `requires` whose arithmetic leaves the i128 range is undefined, not false
+pub fn cube_pos(x: i64, k: u8) -> u8
+  requires x * x * x > 0
+{
+  return k;
+}

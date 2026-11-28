@@ -142,6 +142,9 @@ pub struct Module {
     pub children: Vec<(String, usize)>,
     /// the items of this module in source order (indices into Program.functions / types)
     pub items: Vec<Item>,
+    aliases: Vec<AliasItem>,
+    alias_positions: Vec<crate::parser::AliasPosition>,
+    consts: HashMap<String, ConstItem>,
     /// source name -> index into Program.functions (filled by resolve)
     pub funcs: HashMap<String, usize>,
     /// source name -> index into Program.types (filled by resolve)
@@ -166,6 +169,9 @@ impl Module {
             mods: Vec::new(),
             children: Vec::new(),
             items: Vec::new(),
+            aliases: Vec::new(),
+            alias_positions: vec![],
+            consts: HashMap::new(),
             funcs: HashMap::new(),
             types: HashMap::new(),
             digest: String::new(),
@@ -364,7 +370,7 @@ impl<'g> Loader<'g> {
             self.loaded.insert(k, rel.clone());
         }
         let tag = self.modules.len() + 1;
-        let parsed = match crate::parser::parse_file(&text, tag) {
+        let parsed = match crate::parser::parse_with_shapes(&text, tag, None, true) {
             Ok(p) => p,
             Err(e) => {
                 self.publish(Some(&rel)); // the error carries the tag of this file
@@ -543,7 +549,7 @@ impl<'g> Loader<'g> {
                 self.loaded.insert(k, rel.clone());
             }
             let tag = self.modules.len() + 1;
-            let parsed = match crate::parser::parse_file(&text, tag) {
+            let parsed = match crate::parser::parse_with_shapes(&text, tag, None, true) {
                 Ok(p) => p,
                 Err(e) => {
                     self.publish(Some(&rel)); // the error carries the tag of this file
@@ -626,7 +632,14 @@ fn load_source_full(
     graph: Option<&crate::manifest::Graph>,
 ) -> Result<Loaded, LoadError> {
     let root_file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let first = match crate::parser::parse_file(src, 0) {
+    let first = match crate::parser::parse_with_shapes(src, 0, None, true) {
+        // P12b: a deferred parse is a module file; a root with no `pub` and no `mod` is legacy and parses whole
+        Ok(f) if f.deferred.is_some() && !crate::parser::sniff_explicit(src) => {
+            match crate::parser::parse_with_shapes(src, 0, None, false) {
+                Ok(f) => f,
+                Err(e) => { set_files(Vec::new()); return Err(LoadError::Lang(e)); }
+            }
+        }
         Ok(f) => f,
         Err(mut e) => {
             set_files(Vec::new());
@@ -662,7 +675,7 @@ fn load_source_full(
         return Ok(Loaded { prog, g4: None }); // legacy mode: untouched
     }
     // explicit mode: the root is parsed again with its file tag
-    let root = match crate::parser::parse_file(src, 1) {
+    let root = match crate::parser::parse_with_shapes(src, 1, None, true) {
         Ok(f) => f,
         Err(e) => {
             set_files(vec![root_file]);
@@ -699,7 +712,37 @@ fn load_source_full(
     ld.visit(0).map_err(LoadError::Lang)?;
 
     // the flat program: the items of all modules in module order
-    let Loader { mut modules, parsed, .. } = ld;
+    let Loader { mut modules, mut parsed, .. } = ld;
+    if parsed.iter().any(|pf| pf.deferred.is_some()) {
+        for (m, pf) in modules.iter_mut().zip(&parsed) { m.aliases = pf.prog.aliases.clone(); }
+        let mut headers = G4 { modules, items: vec![], fn_meta: vec![], ty_meta: vec![],
+            entries: vec![], main: None, resolved: false };
+        for (mi, pf) in parsed.iter().enumerate() {
+            let names = match &pf.deferred {
+                Some(file) => file.nominals.clone(),
+                None => pf.prog.types.iter().zip(&pf.ty_pub).map(|(d, vis)| (d.name().to_string(), *vis)).collect(),
+            };
+            for (name, is_pub) in names {
+                let index = headers.ty_meta.len();
+                headers.modules[mi].types.insert(name.clone(), index);
+                headers.ty_meta.push(ItemMeta { module: mi, is_pub, src_name: name,
+                    host_entry: false, pkg: headers.modules[mi].pkg.clone() });
+            }
+        }
+        let roots = headers.modules.iter().enumerate().filter(|(_, m)| m.path.is_empty())
+            .map(|(i, m)| (m.pkg.clone(), i)).collect();
+        let tuples = Default::default();
+        for (mi, pf) in parsed.iter_mut().enumerate() {
+            if let Some(file) = pf.deferred.take() {
+                let resolver = Rs { cur: mi, g4: &headers, roots: &roots, tuples: &tuples,
+                    old_owner: String::new(), new_owner: String::new() };
+                *pf = crate::parser::parse_with_shapes(&file.src, mi + 1, Some(&|g,l,c| resolver.rtype(g,l,c)), false)
+                    .map_err(LoadError::Lang)?;
+            }
+        }
+        modules = headers.modules;
+        for m in &mut modules { m.types.clear(); }
+    }
     let mut prog = Program::default();
     let mut all_items: Vec<Item> = Vec::new();
     let mut fn_meta: Vec<ItemMeta> = Vec::new();
@@ -708,6 +751,15 @@ fn load_source_full(
         let crate::parser::ParsedFile { prog: pp, items, fn_pub, ty_pub, .. } = pf;
         // P9b-2: impl blocks and their functions by identity (`crate::m::Owner`, `crate::m::Owner__name`)
         let (mpath, mpkg) = (modules[mi].path.clone(), modules[mi].pkg.clone());
+        modules[mi].aliases = pp.aliases;
+        modules[mi].alias_positions = pf.positions;
+        for mut c in pp.consts {
+            let source = c.name.clone();
+            let id = ident_in(&mpath, &source, mpkg.as_deref());
+            c.name = format!("pruv_const_{}", ident_key(&id));
+            modules[mi].consts.insert(source, c.clone());
+            prog.consts.push(c);
+        }
         for mut m in pp.methods {
             m.owner = ident_in(&mpath, &m.owner, mpkg.as_deref());
             m.func = ident_in(&mpath, &m.func, mpkg.as_deref());
@@ -737,6 +789,7 @@ fn load_source_full(
                 }
                 Item::Ty(i) => {
                     if let Some(d) = tys[i].take() {
+                        if crate::gtype::is_tuple_name(d.name()) { continue; }
                         let gi = prog.types.len();
                         ty_meta.push(ItemMeta {
                             module: mi,
@@ -882,6 +935,8 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
         }
     }
     // 2. resolve every reference (items in program order); then rename the items to their identities
+    let tuples = std::cell::RefCell::new(std::collections::BTreeMap::new());
+    let mut public_aliases = Vec::new();
     {
         let g4r: &G4 = &*g4;
         // the root module of every package (`crate` of a module is the root of its own package)
@@ -891,7 +946,26 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
                 roots.entry(m.pkg.clone()).or_insert(i);
             }
         }
-        let mut rs = Rs { g4: g4r, cur: 0, old_owner: String::new(), new_owner: String::new(), roots };
+        let mut rs = Rs { g4: g4r, cur: 0, old_owner: String::new(), new_owner: String::new(), roots: &roots, tuples: &tuples };
+        for (mi, md) in g4r.modules.iter().enumerate() {
+            rs.cur = mi;
+            for pos in &md.alias_positions {
+                let (m, path) = rs.walk(&pos.ty.name);
+                if path.len() != 1 || !rs.module(m).aliases.iter().any(|a| a.name == path[0]) { continue; }
+                let shape = rs.rtype(&pos.ty, pos.line, pos.col)?;
+                if !pos.fixed_ok && shape.to_key().contains(crate::gtype::FIXED_PREFIX) {
+                    return Err(err(pos.line, pos.col, "fixed_array_position", "fixed array in an unsupported type position", ""));
+                }
+                if pos.generic && dependencies(&shape).iter().any(|n| crate::gtype::is_tuple_name(n)) {
+                    return Err(PruvError::new("parse", pos.line, pos.col, "tuple_generic",
+                        "tuple types are not available inside a generic declaration", "use a named struct"));
+                }
+            }
+            for a in &md.aliases {
+                let rhs = rs.rtype(&GType::from_key(&a.rhs), a.line, a.col)?;
+                if a.is_pub { public_aliases.push((a.clone(), rhs)); }
+            }
+        }
         for it in &items {
             match *it {
                 Item::Fn(fi) => {
@@ -917,6 +991,18 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
             type_by_id.insert(ident_in(&m.path, name, m.pkg.as_deref()), TyIface { is_pub: g4.ty_meta[*ti].is_pub, fields });
         }
     }
+    for (name, (components, line, col)) in tuples.into_inner() {
+        let fields: Vec<_> = components.iter().enumerate().map(|(i, ty)| FieldDecl {
+            borrowed: false, line, col, name: i.to_string(), ty: ty.to_key(),
+        }).collect();
+        type_by_id.insert(name.clone(), TyIface { is_pub: true,
+            fields: fields.iter().zip(components).map(|(f, t)| (f.name.clone(), t)).collect() });
+        let i = prog.types.len();
+        prog.types.push(TypeDecl::Struct(StructDecl { line, col, name: name.clone(), fields,
+            invariants: vec![], invariant_lines: vec![], tparams: vec![] }));
+        g4.ty_meta.push(ItemMeta { module: 0, src_name: name, is_pub: false, host_entry: false, pkg: None });
+        g4.items.push(Item::Ty(i));
+    }
     // one visited set for the whole program: the first leak aborts the check, so every public declaration visited by an
     // earlier item has a closure without private declarations and need not be walked again
     let mut iface_seen: HashSet<String> = HashSet::new();
@@ -936,6 +1022,9 @@ fn run(prog: &mut Program, g4: &mut G4) -> Res<()> {
                 }
             }
         }
+    }
+    for (alias, rhs) in public_aliases {
+        iface_type(&type_by_id, &rhs, alias.line, alias.col, false, &alias.name, "alias definition", &mut iface_seen)?;
     }
     // 4. root main and host entries
     entries(prog, g4)?;
@@ -981,6 +1070,23 @@ fn module_edges(prog: &Program, g4: &mut G4) {
         raw_owner.insert(d.name().to_string(), m);
         raw_owner.insert(format!("type:{}", d.name()), m);
     }
+    fn component_modules(key: &str, owners: &HashMap<String, usize>, out: &mut HashSet<usize>) {
+        for name in dependencies(&GType::from_key(key)) {
+            if let Some(keys) = crate::gtype::tuple_components(&name) {
+                for key in keys { component_modules(&key, owners, out); }
+            } else if let Some(owner) = owners.get(&name) { out.insert(*owner); }
+        }
+    }
+    let mut tuple_modules = HashMap::new();
+    for d in &prog.types {
+        if crate::gtype::is_tuple_name(d.name()) {
+            let mut deps = HashSet::new();
+            component_modules(d.name(), &raw_owner, &mut deps);
+            tuple_modules.insert(d.name(), deps);
+            owner.remove(&format!("{:?}", d.name()));
+            raw_owner.remove(d.name());
+        }
+    }
     for mi in 0..g4.modules.len() {
         let mut text = String::new();
         for it in &g4.modules[mi].items {
@@ -1016,6 +1122,9 @@ fn module_edges(prog: &Program, g4: &mut G4) {
             let inner = text[start + 1..end.saturating_sub(1).max(start + 1)].replace("\\u{1}", "<");
             for tok in inner.split(|c: char| matches!(c, '<' | '>' | ',' | ' ' | '(' | ')' | '[' | ']' | ';' | '&')) {
                 if !tok.is_empty() {
+                    if let Some(modules) = tuple_modules.get(tok) {
+                        for j in modules { hit(*j); }
+                    }
                     if let Some(&j) = raw_owner.get(tok) {
                         hit(j);
                     }
@@ -1038,7 +1147,8 @@ struct Rs<'a> {
     old_owner: String,
     new_owner: String,
     /// package (None = the program package) -> index of its root module
-    roots: HashMap<Option<String>, usize>,
+    roots: &'a HashMap<Option<String>, usize>,
+    tuples: &'a std::cell::RefCell<std::collections::BTreeMap<String, (Vec<GType>, i64, i64)>>,
 }
 
 impl<'a> Rs<'a> {
@@ -1152,6 +1262,19 @@ impl<'a> Rs<'a> {
 
     // ---- types ----
     fn rtype(&self, ty: &GType, line: i64, col: i64) -> Res<GType> {
+        self.expand(ty, line, col, &mut Vec::new())
+    }
+
+    fn expand(&self, ty: &GType, line: i64, col: i64, busy: &mut Vec<(usize, String)>) -> Res<GType> {
+        if let Some(keys) = crate::gtype::tuple_components(&ty.name) {
+            let comps: Vec<_> = keys.iter().map(|k| self.expand(&GType::from_key(k), line, col, busy)).collect::<Res<_>>()?;
+            if comps.iter().any(|c| c == &GType::unit() || c.name == "@ref" || c.view_payload().is_some()) {
+                return Err(PruvError::new("parse", line, col, "tuple_component", "a tuple component must be a value", ""));
+            }
+            let name = crate::gtype::tuple_name(&comps);
+            self.tuples.borrow_mut().entry(name.clone()).or_insert((comps, line, col));
+            return Ok(GType::new(&name, vec![]));
+        }
         if let Some(owner) = &ty.owner {
             if *owner == self.old_owner {
                 return Ok(GType { name: ty.name.clone(), args: ty.args.clone(), owner: Some(self.new_owner.clone()), index: ty.index });
@@ -1163,17 +1286,48 @@ impl<'a> Rs<'a> {
         }
         let mut args: Vec<GType> = Vec::with_capacity(ty.args.len());
         for a in &ty.args {
-            args.push(self.rtype(a, line, col)?);
+            args.push(self.expand(a, line, col, busy)?);
+        }
+        if ty.name.starts_with("crate::") {
+            let (m, rest) = self.walk(&ty.name);
+            if let [name] = rest.as_slice() {
+                if let Some(a) = self.module(m).aliases.iter().find(|a| a.name == *name) {
+                    self.access(a.is_pub, m, line, col, &ty.name)?;
+                    let id = (m, name.clone());
+                    if busy.contains(&id) {
+                        return Err(err(line, col, "alias_cycle", format!("cyclic alias {}", ty.name), "break the alias cycle"));
+                    }
+                    if a.params.len() != args.len() {
+                        return Err(err(line, col, "type_arity", format!("{} takes {} type arguments", ty.name, a.params.len()), ""));
+                    }
+                    busy.push(id);
+                    let decl = Rs { cur: m, old_owner: String::new(), new_owner: String::new(), ..*self };
+                    let rhs = decl.expand(&GType::from_key(&a.rhs), a.line, a.col, busy)?;
+                    busy.pop();
+                    let mapping = args.into_iter().enumerate().map(|(i,arg)| ((format!("@alias {}", name), i), arg)).collect();
+                    return Ok(crate::gtype::substitute(&rhs, &mapping));
+                }
+            }
         }
         let name = if ty.name == "@ref" || crate::typeinfo::is_builtin_type_name(&ty.name) {
             ty.name.clone()
         } else {
             self.local_or_path_type(&ty.name, line, col)?
         };
-        if name == ty.name && args == ty.args {
-            return Ok(ty.clone());
+        let resolved = GType::new(&name, args);
+        if ty.args.first().is_some_and(|a| a.name.starts_with("crate::")) {
+            if let Some((elem, len)) = resolved.fixed_shape() {
+                if !(elem.int_width().is_some() || elem == &GType::bool() || elem == &GType::str()) {
+                    return Err(err(line, col, "fixed_array_element", "a fixed array requires scalar elements", ""));
+                }
+                if let Some(n) = len.const_value() { crate::parser::fixed_size(line, col, elem, n)?; }
+            }
+            if resolved.name == "@ref" && !resolved.args[0].is_array() && resolved.args[0] != GType::str() {
+                return Err(PruvError::new("parse", line, col, "syntax", "`ref` takes an array or str type", ""));
+            }
         }
-        Ok(GType::new(&name, args))
+        if resolved == *ty { return Ok(resolved); }
+        Ok(crate::gtype::substitute(&resolved, &Default::default()))
     }
 
     /// `rtype` on an AST type key (an unchanged type keeps its key text)
@@ -1201,7 +1355,7 @@ impl<'a> Rs<'a> {
     fn rrefine(&self, r: &mut Option<Refinement>) -> Res<()> {
         if let Some(r) = r {
             if !crate::typeinfo::is_builtin_type_name(&r.base) {
-                r.base = self.local_or_path_type(&r.base, r.line, r.col)?;
+                r.base = self.rtype_key(&r.base, r.line, r.col)?;
             }
         }
         Ok(())
@@ -1342,6 +1496,22 @@ impl<'a> Rs<'a> {
 
     // ---- expressions ----
     fn rexpr(&self, e: &mut Expr) -> Res<()> {
+        if let Expr::IntLit(lit) = e {
+            if let LitKind::Const(name) = &mut lit.kind {
+                if let Some(c) = self.module(self.cur).consts.get(name) { *name = c.name.clone(); }
+            }
+        }
+        if let Expr::Var(v) = e {
+            if v.name.starts_with("crate::") {
+                let (m, rest) = self.walk(&v.name);
+                if rest.len() != 1 { return Err(self.unknown_module(m, &rest, v.line, v.col, &v.name)); }
+                let c = self.module(m).consts.get(&rest[0]).ok_or_else(|| err(v.line, v.col, "unknown_name",
+                    format!("unknown constant {}", v.name), "declare the constant in that module"))?;
+                self.access(c.is_pub, m, v.line, v.col, &v.name)?;
+                *e = Expr::IntLit(IntLit { line: v.line, col: v.col, value: c.value.to_string(), ty: Some(c.ty.clone()), kind: LitKind::Const(c.name.clone()) });
+                return Ok(());
+            }
+        }
         if let Expr::Call(call) = e {
             if PlaceIf::matches(call) || crate::ast::ValueIf::matches(call) {
                 return call.args.iter_mut().try_for_each(|arg| self.rexpr(arg));

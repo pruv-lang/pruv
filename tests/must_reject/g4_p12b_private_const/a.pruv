@@ -1,0 +1,2 @@
+// spec: R-6p-7 reject
+const N: i64 = 4;

@@ -1407,7 +1407,8 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
 - **Visibility.** `pub` makes an item usable from every module. Fields and variants of a visible type are always
   visible. A public signature or contract may mention only public types and items (checked through field types too);
   a function a public contract calls directly must be `pub` (section 6, user functions in contracts);
-  private helpers are fine inside bodies. `pub trusted rust fn` is rejected: wrap it in a public Pruv function.
+  private helpers are fine inside bodies. A constant is a value, not an item a caller must see: a
+  public contract may use a private constant of its own module ([test](tests/spec/p12b_private_const_contract/root.pruv)). `pub trusted rust fn` is rejected: wrap it in a public Pruv function.
 - **Function attributes.** Write at most one of `#[cold]`, `#[inline]` or `#[inline(always)]` directly before a
   non-`pub` top-level `fn` item (generic fns allowed, any module). The attribute affects generated Rust (R-7-3);
   checking and verification are unchanged. Other attributes and arguments are `parse/unknown_attribute`.
@@ -2969,9 +2970,12 @@ read by the checker, the verifier and both backends.
   type by its Rust name and takes `&[u16]` (hand Rust `pub fn reference(sid: &[u16], k: u8) -> u16`); a Rust value of
   a narrow type is always in its range, so the wrapper adds no range check, and a slice gets the same length
   representation check as `&[i64]`; `requires` is checked in the wrapper as for `i64`. Nothing is converted or copied
-  at the boundary. A `requires` on an integer is evaluated in `i128`, so `u64::MAX` passes `x > 0`. A struct whose
+  at the boundary. A `requires` on an integer is evaluated in `i128`, so `u64::MAX` passes `x > 0`; contract arithmetic whose
+  `i128` result is out of range, and an element read `sid[i]` outside the slice, stop with
+  `pruv: requires undefined: ...` (exit 101) instead of wrapping, and an element read checks its own index.
+  With `--trust-callers` the contract checks may be dropped but the length representation check stays. A struct whose
   fields have such types crosses as the Rust struct with the same field types; a narrow enum payload keeps the P11
-  rule. A `take` or `inout` `[u16]`/`[u8]` parameter follows the `[i64]` rules (`Vec<T>`, `&mut [T]` for `T` = `u8` or `u16`). A scalar
+  rule. A `take` or `inout` `[u16]`/`[u8]` parameter follows the `[i64]` rules (`Vec<T>`, `&mut [T]` for `T` = `u8` or `u16`). An owned `[u16]` result (a `take` parameter returned with `move`, or `copy()`) is `Vec<u16>`. A scalar
   `inout` of any integer width at a host entry stays `type/entry_signature` (R-6g-4). A fixed-length array `[T; N]` at
   a host entry stays `type/fixed_array_position`. Still rejected with
   `small_int_unsupported`: such a type in a trusted rust fn signature (stage
@@ -2979,9 +2983,33 @@ read by the checker, the verifier and both backends.
   `codegen`; a later P12 bundle, docs/P12_HOST_SPEC.md). A child-module `pub` function is not a host entry, so on
   LLVM it keeps such types like any internal function. Tests: [accept](tests/spec/r6p_6_host_accept.pruv),
   [requires](tests/spec/r6p_6_host_requires.pruv), [module](tests/spec/r6p_6_host_module/root.pruv),
+  [requires reads an element](tests/spec/r6p_6_host_requires_elem.pruv), [trust callers](tests/spec/r6p_6_host_trust.pruv),
   [modes](tests/spec/r6p_6_host_modes.pruv), [LLVM module](tests/spec/r6p_6_host_module_llvm/root.pruv), [LLVM reject](tests/spec/r6p_6_host_reject_llvm.pruv),
+  [owned result](tests/spec/r6p_6_host_owned.pruv), [LLVM struct field reject](tests/spec/r6p_6_host_reject_llvm_field.pruv),
   [foreign reject](tests/spec/r6p_6_host_reject_foreign.pruv),
   [foreign `[u16]` reject](tests/spec/r6p_6_host_reject_foreign_u16.pruv).
+- R-6p-7 **Tuples, constants and aliases in module programs (P12b).** A module program (G4) may declare tuple types,
+  `const`/`pub const` and `type`/`pub type` in any file. A constant and an alias belong to the module that declares
+  them: inside it they are used by the bare name, elsewhere by `crate::m::NAME` / `crate::m::Alias<..>`; a constant's
+  initializer is evaluated in its module and may name only constants of the same file, and two modules may each
+  declare a constant of one name with different values. An alias's right side is resolved in its declaring module,
+  even when used from another one. A non-`pub` constant or alias used from another module is `type/private_item`; an
+  unknown `crate::m::NAME` constant is `type/unknown_name`. Public aliases are expanded before the visibility checks:
+  `pub type A = Private;` and a `pub fn` signature using such an alias are `type/public_interface`; an alias cycle
+  through module paths is `type/alias_cycle`. A tuple type is identified by its resolved component types: `(Pair, i64)`
+  in module `a` and `(crate::a::Pair, i64)` elsewhere are one type, and two modules' own `Pair` give two different
+  tuples (`type/type_mismatch`). A module constant path inside a constant initializer or a fixed length `[T; N]` stays
+  `type/const_expr`. Code: Rust prints module constants under encoded names, uses print aliases expanded, and tuples
+  are native Rust tuples, so a host entry `-> (i64, u8)` is that Rust tuple. On LLVM a host-facing signature with a
+  tuple is `codegen/tuple_host_unsupported` (bundle P12e); internal tuples follow R-6s-5. Tests:
+  [tuple](tests/spec/p12b_tuple_module/root.pruv), [constants](tests/spec/p12b_const_module/root.pruv),
+  [aliases](tests/spec/p12b_alias_module/root.pruv), [tuple identity](tests/spec/p12b_tuple_identity/root.pruv),
+  [LLVM internal](tests/spec/p12b_internal_llvm/root.pruv), [LLVM host](tests/spec/p12b_host_tuple_llvm.pruv),
+  [private constant](tests/must_reject/g4_p12b_private_const/root.pruv),
+  [private alias](tests/must_reject/g4_p12b_private_alias/root.pruv),
+  [public alias](tests/must_reject/g4_p12b_public_alias/root.pruv),
+  [signature alias](tests/must_reject/g4_p12b_signature_alias/root.pruv),
+  [cycle](tests/must_reject/g4_p12b_cycle/root.pruv), [LLVM object](tests/must_reject/p12b_llvm_tuple.pruv).
 
 ## 6q. For loops (P4)
 ```
@@ -3150,11 +3178,11 @@ borrows.
 - R-6s-5 **Payloads and limits.** Tuples are `Result`/`Option` payloads and function parameters and results;
   contracts project through `ok_val(result).0` and `some_val(result).1`; `match` arms take tuple patterns such as
   `Some((a, b))` (R-6u-1). Not yet supported: tuple structs `struct P(A, B);`
-  (`parse/tuple_struct`); tuple types inside a generic declaration (`parse/tuple_generic`); tuples in a program with
-  `pub` or `mod` items (`parse/tuple_module`, P12). Tests: [accept](tests/spec/r6s_5_accept.pruv),
+  (`parse/tuple_struct`); tuple types inside a generic declaration (`parse/tuple_generic`). Tuples in a module
+  program follow R-6p-7. Tests: [accept](tests/spec/r6s_5_accept.pruv),
   [reject](tests/spec/r6s_5_reject.pruv), [false contract](tests/spec/r6s_5_reject_contract.pruv),
   [runtime](tests/runtime/p6_rt_result.pruv), [tuple struct](tests/must_reject/p6_tuple_struct.pruv),
-  [generic](tests/must_reject/p6_generic.pruv), [module](tests/must_reject/p6_module.pruv).
+  [generic](tests/must_reject/p6_generic.pruv), [arity](tests/must_reject/p6_module.pruv).
 
 ## 6t. Constants and characters (P7)
 ```
@@ -3199,8 +3227,7 @@ fn is_digit(c: char) -> bool
   arithmetic step against `T`, the operand of a conversion against its own type and the result against the target
   (`type/const_range`). An operand of another type, or an integer literal as a char constant, is `type/const_type`. A use of the name is the value, so the verifier knows it exactly. A parameter, local, binder,
   `for` binder, function or field named like a constant, or a second constant of the same name, is `parse/const_shadow`. A constant name is upper case (`A-Z`, digits, `_`, starting with a letter), as in Rust style; any other name, `result` included, is `parse/const_name`. A constant is an ordinary typed operand: `1 + N` with `N: u8` is `u8`, `0..N` is a range and `a[N]` an index. Constants
-  exist only in a single-file program without `pub` or `mod` items; `pub const` and constants next to modules are
-  `parse/const_module` (parity row P7-3). Code: Rust emits `const NAME: T = value;` with the evaluated value and
+  and `pub const` in a module program follow R-6p-7 (parity row P7-3). Code: Rust emits `const NAME: T = value;` with the evaluated value and
   spells uses by name; LLVM uses the value. Tests: [accept](tests/spec/r6t_3_accept.pruv),
   [reject](tests/spec/r6t_3_reject.pruv), [false contract](tests/spec/r6t_3_reject_contract.pruv),
   [runtime](tests/runtime/p7_rt_const.pruv), [call](tests/must_reject/p7_const_expr.pruv),
@@ -3208,7 +3235,7 @@ fn is_digit(c: char) -> bool
   [mismatch](tests/must_reject/p7_const_mismatch.pruv), [division](tests/must_reject/p7_const_div_zero.pruv),
   [range](tests/must_reject/p7_const_neg_range.pruv), [char range](tests/must_reject/p7_const_char_range.pruv),
   [shadow](tests/must_reject/p7_const_shadow.pruv), [duplicate](tests/must_reject/p7_const_dup.pruv),
-  [pub](tests/must_reject/p7_const_pub.pruv), [lower case](tests/must_reject/p7_const_result.pruv),
+  [duplicate name](tests/must_reject/p7_const_pub.pruv), [lower case](tests/must_reject/p7_const_result.pruv),
   [for binder](tests/must_reject/p7_const_for_binder.pruv), [char from int](tests/must_reject/p7_const_char_int.pruv),
   [negative division](tests/must_reject/p7_const_neg_div.pruv).
 - R-6t-4 **Fixed-length arrays (values).** `[T; N]` is a local value type written in a `let` annotation;
@@ -3563,13 +3590,13 @@ fn head(r: Row) -> Res<i64> { if r[0] < 0 { return Err(r[0]); } return Ok(r[0]);
   type (`type/type_parameter`). A name declared as both an alias and a struct or enum, or two aliases with one name,
   is `type/dup_type`; a wrong number of arguments `type/type_arity`; an alias that reaches itself (also through
   arguments that only grow, `type A<T> = Option<A<Option<T>>>`) `type/alias_cycle`, reported for unused aliases too.
-  Aliases exist only in a single-file program without `pub` or `mod` items (`parse/alias_module`, parity row P9a-1).
+  Aliases and `pub type` in a module program follow R-6p-7 (parity row P9a-1).
   Code: the Rust module keeps a `type Name = T;` item for each used non-generic alias of a scalar, a fixed array of
   scalars or a tuple of these whose name is not a Rust 2021 prelude, common std or `Pruv` runtime name; uses print the expanded type (parity row
   P9a-2). Tests: [runtime](tests/runtime/p9_rt_alias.pruv),
   [with patterns](tests/runtime/p9_rt_alias_p8.pruv), [cycle](tests/must_reject/p9_alias_cycle.pruv),
   [growing cycle](tests/must_reject/p9_alias_growing_cycle.pruv), [duplicate](tests/must_reject/p9_alias_duplicate.pruv),
-  [arity](tests/must_reject/p9_alias_arity.pruv), [module](tests/must_reject/p9_alias_module.pruv),
+  [arity](tests/must_reject/p9_alias_arity.pruv), [self cycle](tests/must_reject/p9_alias_module.pruv),
   [false contract](tests/must_reject/p9_alias_false_ensures.pruv), [positions](tests/runtime/p9_rt_alias_pos.pruv),
   [array cycle](tests/must_reject/p9_alias_array_cycle.pruv), [constants](tests/runtime/p9_rt_alias_const.pruv),
   [constant cycle](tests/must_reject/p9_alias_const_cycle.pruv), [tuple in generic](tests/must_reject/p9_alias_tuple_generic.pruv),
@@ -4235,8 +4262,6 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/bad_int` | parse | a malformed integer literal, such as a trailing `_` (R-1-2) |
 | `parse/break_value` | parse | `break` followed by a value (not `;`, a label or `}`); bundle P15 (R-6r-3) |
 | `parse/char_literal` | parse | a malformed character or byte literal: empty, several characters, a surrogate or an out-of-range escape (R-6t-1) |
-| `parse/alias_module` | parse | a type alias in a program with `pub` or `mod` items (R-6v-1) |
-| `parse/const_module` | parse | `pub const`, or a constant in a program with `pub` or `mod` items (R-6t-3) |
 | `parse/const_name` | parse | a constant name that is not upper case (R-6t-3) |
 | `parse/const_shadow` | parse | a name declared again where a constant of that name exists, or a constant declared twice (R-6t-3) |
 | `parse/cost_syntax` | parse | `cost` needs one expression and must be the last header clause |
@@ -4278,7 +4303,6 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `parse/tuple_component` | parse | `()` as a tuple component (R-6s-1) |
 | `parse/tuple_generic` | parse | a tuple type inside a generic declaration (R-6s-5) |
 | `parse/tuple_index` | parse | a tuple projection index that is not a plain decimal number, such as `t.01` (R-6s-1) |
-| `parse/tuple_module` | parse | a tuple type in a program with `pub` or `mod` items (R-6s-5) |
 | `parse/tuple_needs_type` | parse | a destructuring `let` without its tuple type (R-6s-2) |
 | `parse/tuple_pattern_type` | parse | a destructuring pattern whose component count does not match its tuple type (R-6s-2) |
 | `parse/tuple_struct` | parse | a tuple struct declaration `struct P(A, B);` (R-6s-5) |
@@ -4468,6 +4492,7 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `verify/variant_domain` | verify | a `variant_field` lookup not guarded by its variant |
 | `verify/verify_unknown` | verify | the solver gave up on one obligation (see below) |
 | `codegen/foreign_target` | codegen | a program with foreign or file operations sent to native emission without the Rust host build |
+| `codegen/tuple_host_unsupported` | codegen | a tuple in a host-facing signature sent to the LLVM backend (R-6p-7, bundle P12e) |
 | `codegen/small_int_unsupported` | codegen | an integer type other than `i64`, or `[u16]`, in a host-facing signature sent to the LLVM backend or its Rust bindings (R-6p-6, later P12 bundle) |
 | `codegen/tuple_llvm_owned` | codegen | a tuple with a `String` or owned-collection component LLVM cannot store as a struct field, sent to the LLVM backend (R-6s-3, P12) |
 | `codegen/llvm_emit` | codegen | LLVM could not emit the object file (Rust compiler) |

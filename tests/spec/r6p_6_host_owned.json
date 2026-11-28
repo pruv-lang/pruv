@@ -1,0 +1,4 @@
+{
+  "gen_contains": ["pub fn keep(s: ::std::vec::Vec<u16>) -> ::std::vec::Vec<u16>", "pub fn dup(s: &[u16]) -> ::std::vec::Vec<u16>"],
+  "run": {"backends": ["rust"], "exit": 0, "flags_matrix": [[], ["--no-verify"]], "stdout_lines": ["2 55296", "6", "0"]}
+}

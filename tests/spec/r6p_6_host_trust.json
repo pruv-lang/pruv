@@ -1,0 +1,1 @@
+{"flags": ["--trust-callers"], "gen_contains": ["pub fn pick(sid: &[u16], k: u8) -> u16", "(array length)"], "gen_absent": ["requires violated"]}

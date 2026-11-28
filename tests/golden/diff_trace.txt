@@ -123,6 +123,14 @@ fuzz|fuzz:41	40 cases: obl=5 5, obl=6 4, obl=7 4, obl=2 3, ...	0/default=4e71239
 fuzz|fuzz:56	40 cases: obl=19 4, obl=20 4, obl=7 4, obl=10 3, ...	0/default=fdc7aea38ee2	1/default=aced766cbcb5	2/default=0861bbc6035b	3/default=232dfa8f5e01	4/default=e20f93ec98d5	5/default=c15ec86ae21d	6/default=298016acdc1d	7/default=6a49da0d5245	8/default=67a1dc2415c9	9/default=fd434f126512	10/default=5c0eb3738782	11/default=58ec714b6e9f	12/default=b2563fcabd4b	13/default=fe02033ea119	14/default=4b0bcf6b8ecb	15/default=44f0d4c66ba7	16/default=128a629856bd	17/default=e9f2b27b34ab	18/default=1d8999f96122	19/default=d37dfd5c83c2	20/default=5fdb58680fdf	21/default=2bfc430136de	22/default=2f8fc13685a2	23/default=ccf376fbc6ff	24/default=d4998b0bf400	25/default=12bed22c3fb9	26/default=c04011d0df52	27/default=e66babbe6237	28/default=8633ea528566	29/default=8b6b02a82e0b	30/default=8191783eb7e0	31/default=a9df213dfcbc	32/default=fd51b6d73b63	33/default=8313d4d7e343	34/default=ccac2bd9f148	35/default=69f531f092e7	36/default=b82a3ba28466	37/default=9380c9a3f038	38/default=a47792e91145	39/default=ccac2bd9f148
 fuzz|fuzz:57	40 cases: obl=6 6, obl=15 3, obl=19 3, obl=3 3, ...	0/default=002912c0dc61	1/default=3a1d24845003	2/default=ed96b8a73ad1	3/default=63738d64a34f	4/default=9a8a09c354f4	5/default=f84eb7a4e2af	6/default=db235d548c96	7/default=d9c24ccf96fe	8/default=19f466ff25a6	9/default=17fb7959b1aa	10/default=95d868b5d245	11/default=f459427f2173	12/default=49dd519004eb	13/default=0252039e6f44	14/default=132500b2bae6	15/default=ffcbc65b8b34	16/default=2434050f5250	17/default=b4269ad8a47c	18/default=acddd5796d07	19/default=6b9ccae79859	20/default=55e60d00c6fb	21/default=775ab4eebb44	22/default=70dc516bc59c	23/default=7a441fc3ee73	24/default=a96c98fda73e	25/default=c52b1add250c	26/default=d4157dde3363	27/default=30183aca4ccb	28/default=02e0c891f646	29/default=6def017d7d61	30/default=3f88d2d363e4	31/default=77f7833b5cac	32/default=c04fe3802563	33/default=c52b1add250c	34/default=d686366c4f92	35/default=381ca06f6260	36/default=e646f95ed112	37/default=0ec23b1b094f	38/default=3da40207985c	39/default=527093ec0b89
 g4_reject|tests/must_reject/g4_lgaps20_fixed_module_oob/root.pruv	1 case: obl=3 1	default=54f640ced6e0
+g4_reject|tests/must_reject/g4_p12b_const_init_path/root.pruv	1 case: obl=0 1	default=4f15e9b46a82
+g4_reject|tests/must_reject/g4_p12b_cycle/root.pruv	1 case: obl=0 1	default=6c5cac56767e
+g4_reject|tests/must_reject/g4_p12b_fixed_len_path/root.pruv	1 case: obl=0 1	default=501fd199935d
+g4_reject|tests/must_reject/g4_p12b_private_alias/root.pruv	1 case: obl=0 1	default=fb88136a4660
+g4_reject|tests/must_reject/g4_p12b_private_const/root.pruv	1 case: obl=0 1	default=c5c163ca3e72
+g4_reject|tests/must_reject/g4_p12b_public_alias/root.pruv	1 case: obl=0 1	default=ee6eaab145f7
+g4_reject|tests/must_reject/g4_p12b_signature_alias/root.pruv	1 case: obl=0 1	default=b05dc2a57a78
+g4_reject|tests/must_reject/g4_p12b_unknown_const/root.pruv	1 case: obl=0 1	default=6344c3312c14
 g4_reject|tests/must_reject/g4_r01_missing_child/root.pruv	1 case: obl=0 1	default=d80c3151039c
 g4_reject|tests/must_reject/g4_r02_duplicate_module/root.pruv	1 case: obl=0 1	default=413332d85e13
 g4_reject|tests/must_reject/g4_r03_module_alias/root.pruv	1 case: obl=0 1	default=6f9bd4ff0163
@@ -1308,6 +1316,8 @@ must_reject|tests/must_reject/lgaps9_str_bytes_len.pruv	1 case: obl=1 1	default=
 must_reject|tests/must_reject/lgaps9_views_subview_len.pruv	1 case: obl=5 1	default=b664f1052678
 must_reject|tests/must_reject/lgaps9_views_subview_sum.pruv	1 case: obl=5 1	default=520fbd25b7f7
 must_reject|tests/must_reject/p12a_inout_u8_entry.pruv	1 case: obl=0 1	default=c7ad0618823e
+must_reject|tests/must_reject/p12b_legacy_deferred.pruv	1 case: obl=0 1	default=d97c1e5328f9
+must_reject|tests/must_reject/p12b_llvm_tuple.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 must_reject|tests/must_reject/p1_add_overflow.pruv	1 case: obl=1 1	default=e1d17f5d2eac
 must_reject|tests/must_reject/p1_bit_and.pruv	1 case: obl=0 1	default=ce42aa03fda7
 must_reject|tests/must_reject/p1_cast_in_contract.pruv	1 case: obl=0 1	default=0403482cabf8
@@ -1402,7 +1412,7 @@ must_reject|tests/must_reject/p6_index.pruv	1 case: obl=0 1	default=5200c159f912
 must_reject|tests/must_reject/p6_literal_untyped.pruv	1 case: obl=0 1	default=561206808597
 must_reject|tests/must_reject/p6_llvm_owned.pruv	1 case: obl=2 1	default=b27fbe69a47f
 must_reject|tests/must_reject/p6_match_pattern.pruv	1 case: obl=0 1	default=db472c3eef00
-must_reject|tests/must_reject/p6_module.pruv	1 case: obl=0 1	default=f092e94e52a2
+must_reject|tests/must_reject/p6_module.pruv	1 case: obl=0 1	default=e97a834e83e3
 must_reject|tests/must_reject/p6_moved_reuse.pruv	1 case: obl=0 1	default=6ce2d237dcf7
 must_reject|tests/must_reject/p6_needs_type.pruv	1 case: obl=0 1	default=9820d8eee866
 must_reject|tests/must_reject/p6_partial_move.pruv	1 case: obl=0 1	default=54e952f1bca6
@@ -1432,7 +1442,7 @@ must_reject|tests/must_reject/p7_const_for_binder.pruv	1 case: obl=0 1	default=1
 must_reject|tests/must_reject/p7_const_mismatch.pruv	1 case: obl=0 1	default=40e707252eb9
 must_reject|tests/must_reject/p7_const_neg_div.pruv	1 case: obl=0 1	default=782a4c02eda8
 must_reject|tests/must_reject/p7_const_neg_range.pruv	1 case: obl=0 1	default=b5b28d294c6a
-must_reject|tests/must_reject/p7_const_pub.pruv	1 case: obl=0 1	default=b120239f6118
+must_reject|tests/must_reject/p7_const_pub.pruv	1 case: obl=0 1	default=9f1fc5d71422
 must_reject|tests/must_reject/p7_const_result.pruv	1 case: obl=0 1	default=dfefacf90f4b
 must_reject|tests/must_reject/p7_const_shadow.pruv	1 case: obl=0 1	default=c4cd54a49e36
 must_reject|tests/must_reject/p7_const_type.pruv	1 case: obl=0 1	default=d608eab5946a
@@ -1533,7 +1543,7 @@ must_reject|tests/must_reject/p9_alias_cycle.pruv	1 case: obl=0 1	default=ce34fb
 must_reject|tests/must_reject/p9_alias_duplicate.pruv	1 case: obl=0 1	default=a80260879a88
 must_reject|tests/must_reject/p9_alias_false_ensures.pruv	1 case: obl=3 1	default=3e6ae988b861
 must_reject|tests/must_reject/p9_alias_growing_cycle.pruv	1 case: obl=0 1	default=32bbe2630e06
-must_reject|tests/must_reject/p9_alias_module.pruv	1 case: obl=0 1	default=0ef52258a5bc
+must_reject|tests/must_reject/p9_alias_module.pruv	1 case: obl=0 1	default=15cc9f511320
 must_reject|tests/must_reject/p9_alias_param_shadow.pruv	1 case: obl=0 1	default=e082a0a456cf
 must_reject|tests/must_reject/p9_alias_ref_scalar.pruv	1 case: obl=0 1	default=70dad1dfef29
 must_reject|tests/must_reject/p9_alias_refine_false.pruv	1 case: obl=1 1	default=6fde44be4e0f

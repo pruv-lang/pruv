@@ -1,0 +1,5 @@
+// spec: R-6p-7 reject
+// a single file without pub or mod stays legacy even when a constant type is a crate:: path
+type W = i64;
+const X: crate::W = 3;
+fn f() -> i64 { return X; }

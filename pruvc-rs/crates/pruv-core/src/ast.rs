@@ -921,6 +921,9 @@ pub struct MethodItem {
 /// P9: `type name<params> = rhs;` with `rhs` a type key whose parameters are plain names.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AliasItem {
+    pub line: i64,
+    pub col: i64,
+    pub is_pub: bool,
     pub name: String,
     pub params: Vec<String>,
     pub rhs: String,
@@ -929,6 +932,7 @@ pub struct AliasItem {
 /// P7: one evaluated module constant; `ty` is an int width name or `char`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConstItem {
+    pub is_pub: bool,
     pub line: i64,
     pub col: i64,
     pub name: String,

@@ -1398,6 +1398,8 @@ must_reject|must_reject/lgaps9_str_bytes_len.pruv	2 cases: exit 2	llvm=bf5bcc882
 must_reject|must_reject/lgaps9_views_subview_len.pruv	2 cases: exit 2	llvm=0b37769bc998	rust=0b37769bc998
 must_reject|must_reject/lgaps9_views_subview_sum.pruv	2 cases: exit 2	llvm=27d244e74916	rust=27d244e74916
 must_reject|must_reject/p12a_inout_u8_entry.pruv	2 cases: exit 2	llvm=9dfab933044e	rust=9dfab933044e
+must_reject|must_reject/p12b_legacy_deferred.pruv	2 cases: exit 2	llvm=a4bddfb0b488	rust=a4bddfb0b488
+must_reject|must_reject/p12b_llvm_tuple.pruv	2 cases: exit 2	llvm=37d44418f7e6	rust=b3099f298c6e
 must_reject|must_reject/p1_add_overflow.pruv	2 cases: exit 2	llvm=bbdc5f856ac9	rust=bbdc5f856ac9
 must_reject|must_reject/p1_bit_and.pruv	2 cases: exit 2	llvm=1fca1e362b66	rust=1fca1e362b66
 must_reject|must_reject/p1_cast_in_contract.pruv	2 cases: exit 2	llvm=214330cefe95	rust=214330cefe95
@@ -1492,7 +1494,7 @@ must_reject|must_reject/p6_index.pruv	2 cases: exit 2	llvm=cb99b41deaeb	rust=cb9
 must_reject|must_reject/p6_literal_untyped.pruv	2 cases: exit 2	llvm=8dcd1a6b0894	rust=8dcd1a6b0894
 must_reject|must_reject/p6_llvm_owned.pruv	2 cases: exit 2	llvm=a71db6d2501d	rust=996838783f35
 must_reject|must_reject/p6_match_pattern.pruv	2 cases: exit 2	llvm=af91daa383dc	rust=af91daa383dc
-must_reject|must_reject/p6_module.pruv	2 cases: exit 2	llvm=8ee7a7403815	rust=8ee7a7403815
+must_reject|must_reject/p6_module.pruv	2 cases: exit 2	llvm=0ac8bbea079f	rust=0ac8bbea079f
 must_reject|must_reject/p6_moved_reuse.pruv	2 cases: exit 2	llvm=725f92d8a44a	rust=725f92d8a44a
 must_reject|must_reject/p6_needs_type.pruv	2 cases: exit 2	llvm=8aedff9198e3	rust=8aedff9198e3
 must_reject|must_reject/p6_partial_move.pruv	2 cases: exit 2	llvm=6383c0864342	rust=6383c0864342
@@ -1522,7 +1524,7 @@ must_reject|must_reject/p7_const_for_binder.pruv	2 cases: exit 2	llvm=a96344bc72
 must_reject|must_reject/p7_const_mismatch.pruv	2 cases: exit 2	llvm=040e87b492a4	rust=040e87b492a4
 must_reject|must_reject/p7_const_neg_div.pruv	2 cases: exit 2	llvm=e1207edc8ee9	rust=e1207edc8ee9
 must_reject|must_reject/p7_const_neg_range.pruv	2 cases: exit 2	llvm=a11c9cffa04f	rust=a11c9cffa04f
-must_reject|must_reject/p7_const_pub.pruv	2 cases: exit 2	llvm=d531fd386eed	rust=d531fd386eed
+must_reject|must_reject/p7_const_pub.pruv	2 cases: exit 2	llvm=5b50e8256438	rust=5b50e8256438
 must_reject|must_reject/p7_const_result.pruv	2 cases: exit 2	llvm=eab58bc55cf4	rust=eab58bc55cf4
 must_reject|must_reject/p7_const_shadow.pruv	2 cases: exit 2	llvm=3865438d4ad4	rust=3865438d4ad4
 must_reject|must_reject/p7_const_type.pruv	2 cases: exit 2	llvm=0ea33eab3e83	rust=0ea33eab3e83
@@ -1623,7 +1625,7 @@ must_reject|must_reject/p9_alias_cycle.pruv	2 cases: exit 2	llvm=1b3b5ae3c8c9	ru
 must_reject|must_reject/p9_alias_duplicate.pruv	2 cases: exit 2	llvm=a01eda05eb13	rust=a01eda05eb13
 must_reject|must_reject/p9_alias_false_ensures.pruv	2 cases: exit 2	llvm=56521001349e	rust=56521001349e
 must_reject|must_reject/p9_alias_growing_cycle.pruv	2 cases: exit 2	llvm=649af8ff8292	rust=649af8ff8292
-must_reject|must_reject/p9_alias_module.pruv	2 cases: exit 2	llvm=24899bf5cbc9	rust=24899bf5cbc9
+must_reject|must_reject/p9_alias_module.pruv	2 cases: exit 2	llvm=11ab5999d035	rust=11ab5999d035
 must_reject|must_reject/p9_alias_param_shadow.pruv	2 cases: exit 2	llvm=71083a65654d	rust=71083a65654d
 must_reject|must_reject/p9_alias_ref_scalar.pruv	2 cases: exit 2	llvm=4cd3b3842983	rust=4cd3b3842983
 must_reject|must_reject/p9_alias_refine_false.pruv	2 cases: exit 2	llvm=146ef353e026	rust=146ef353e026
