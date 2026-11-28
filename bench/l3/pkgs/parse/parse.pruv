@@ -361,8 +361,9 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
   return Err::<i64, crate::lex::Fault>(crate::lex::Fault { position: end, kind: 5 });
 }
 // Parse one root and consume its trailing whitespace (hand `parse`).
-// 4.4zc (4.4l-RS): no up-front reserve (the hand tape grows from empty); `object` takes only an object root, as the
-// hand `parse_line` (`parser.ws(); parser.object(1)?`): another first byte fails there, before any record.
+// L-gaps 27 (4.4zf-KE): the tape reserves 32 records (192 words) up front, as the json hand `parse`
+// (`Vec::with_capacity(32 * WIDTH)`), then grows inside the append. 4.4zc had removed it; a short JSONL line then
+// grew from an empty tape through about five reallocations. `object` takes only an object root, as the hand `parse_line` (`parser.ws(); parser.object(1)?`): another first byte fails there, before any record.
 fn scan_records(input: [u8], inout tape: [i64], object: bool) -> Result<(), crate::lex::Fault> ! alloc
   requires len(input) <= 16777216 && len(tape) == 0 && utf8_valid_span(input, 0, len(input))
   ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
@@ -373,6 +374,7 @@ fn scan_records(input: [u8], inout tape: [i64], object: bool) -> Result<(), crat
   ensures is_ok(result) ==> (tape[4] == -1 && tape[3] == len(tape) / 6 && tape[0] != 7)
   ensures (is_ok(result) && object) ==> tape[0] == 6
 {
+  arr_reserve(inout tape, 192);
   let n: i64 = len(input);
   let mut pos: i64 = 0;
   if object {

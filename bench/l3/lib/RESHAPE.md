@@ -2921,3 +2921,20 @@ ground-count proofs themselves (more obligations and heavier ones in `record`, `
 `open_container`). Further work has to cut obligations (fewer restated count facts, one frame lemma per writer instead
 of per-call assert chains) or reshape the proof, not the stage policy. Before any merge the stage rule and the witness
 lemma need SPEC R-6-4 text, accept/reject tests and the A/B review.
+
+## L-gaps 27: 4.4l-CT, child count proved in `child` only (seventh attempt)
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4l-CT (G-DB33-1/2) | proof gap, open (cost) | Side branch `lair/pruv-l-gaps-27-ct-wip` (8e2b5e65, on a104b046 merged with main f3193bc4). To cut obligations, the ground child-count ensures (`len(old(tape)) > 0 \|\| parent == -1 ==> count(..) == count(old ..) + 1`) is removed from `record` and `open_container`, and so is `open_container`'s five-assert split / frame chain after `set_header`. `child` alone proves the count: it reads the record start `m0` and end `m` around the `record` call and asserts that no new record past `m0` has parent `id`, that the new-range count is 0, that the old range is framed, and two range splits. Result: a5_root verifies (rc 0, fresh), but solver time is 8.35 s in 3731 queries, against 7.83 s (a104b046 sources, same compiler, same session) and 5.51 s (main sources). `open_container` falls 0.65 -> 0.40 s and `record` 1.12 -> 0.84 s, but `child` rises 0.37 -> 1.42 s (51 queries): the frame and zero facts that the callee used to give now have to be proved again in the caller, against a tape that `record` changed opaquely. Not timed under the perf lock (the solver total is already above the a104b046 sources, which took 10.0 s fresh against the 8.8 s target) | a5 only; same unaudited verifier change as L-gaps 26 |
+
+Next direction for 4.4l-CT: moving the count fact between writers only moves its cost (callee ensures or caller
+asserts). Seven attempts show that ground counts over the flat tape cost 2-3 s of solver time on a5, however the facts
+are placed. Two directions are still open:
+- Keep the count but give the verifier a frame rule for `count` over a range the call did not write (one lemma per
+  `arr_append` writer), so `child` gets the frame fact without an assert chain.
+- Prove the subtree property without counts: a per-record `end` field written on close, so `contained` is a range
+  fact (`id < k < end(id)`) and needs no count at all. This changes the tape layout and every `pkgs/parse` user.
+
+Separately, claude `parse::parse` still runs `json::check_subtrees` through `publication_ok`. That walk is the
+depth_limit cell in 4.4zf-KE (1.76-1.88x hand), so a 4.4l-CT fix should drop it on that path too.
