@@ -151,7 +151,7 @@ c2:
   ret i128 %rr
 }
 
-define internal { i1, i64 } @f0__pruv_body() {
+define internal { i1, i64 } @f0__pruv_body() alwaysinline {
 entry:
   br label %start
 start:
@@ -181,7 +181,7 @@ entry:
   ret void
 }
 
-define internal { i1, i64 } @f1__pruv_body(i64 %p.a) {
+define internal { i1, i64 } @f1__pruv_body(i64 %p.a) alwaysinline {
 entry:
   br label %start
 start:
@@ -233,7 +233,7 @@ entry:
   ret void
 }
 
-define internal { i1, i64 } @f5__pruv_body(i64 %p.a, i64 %p.b, i64 %p.c, i64 %p.d, i64 %p.e) {
+define internal { i1, i64 } @f5__pruv_body(i64 %p.a, i64 %p.b, i64 %p.c, i64 %p.d, i64 %p.e) alwaysinline {
 entry:
   %l0.s.a = alloca i64
   br label %start

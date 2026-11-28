@@ -149,7 +149,7 @@ c2:
   ret i128 %rr
 }
 
-define internal { i1, i64 } @get_opt__pruv_body(i64 %p.x) {
+define internal { i1, i64 } @get_opt__pruv_body(i64 %p.x) alwaysinline {
 entry:
   br label %start
 start:
@@ -201,7 +201,7 @@ entry:
   ret void
 }
 
-define internal { i1, i64 } @get_res__pruv_body(i64 %p.a, i64 %p.b) {
+define internal { i1, i64 } @get_res__pruv_body(i64 %p.a, i64 %p.b) alwaysinline {
 entry:
   br label %start
 start:
@@ -267,7 +267,7 @@ entry:
   ret void
 }
 
-define internal { i1, i1 } @mix__pruv_body({ i1, i64 } %p.o, { i1, i1 } %p.p) {
+define internal { i1, i1 } @mix__pruv_body({ i1, i64 } %p.o, { i1, i1 } %p.p) alwaysinline {
 entry:
   br label %start
 start:

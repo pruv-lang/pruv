@@ -87,7 +87,7 @@ done:
   ret void
 }
 
-define internal %pruv_t_pruv_g3_t_4_Pair_2_ob_ri @nest_id__pruv_body(%pruv_t_pruv_g3_t_4_Pair_2_ob_ri %p.p) {
+define internal %pruv_t_pruv_g3_t_4_Pair_2_ob_ri @nest_id__pruv_body(%pruv_t_pruv_g3_t_4_Pair_2_ob_ri %p.p) alwaysinline {
 entry:
   br label %start
 start:
@@ -144,7 +144,7 @@ entry:
   ret void
 }
 
-define internal %pruv_t_pruv_g3_t_4_Pair_2_ob_b @nest_pick__pruv_body(%pruv_t_pruv_g3_t_4_Pair_2_ob_ri %p.p, %pruv_t_pruv_g3_t_4_Pair_2_b_ob %p.q) {
+define internal %pruv_t_pruv_g3_t_4_Pair_2_ob_b @nest_pick__pruv_body(%pruv_t_pruv_g3_t_4_Pair_2_ob_ri %p.p, %pruv_t_pruv_g3_t_4_Pair_2_b_ob %p.q) alwaysinline {
 entry:
   br label %start
 start:

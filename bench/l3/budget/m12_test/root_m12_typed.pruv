@@ -1252,6 +1252,16 @@ fn reason_code(a: [i64], p: i64) -> i64 ! alloc
   return -1;
 }
 
+// {sessionId, budgetId} with budgetId copied from a budget whose id is not a string (undefined when absent).
+fn raw_ref(sid: [i64], budget: [i64]) -> [i64] ! alloc
+{
+  let p: i64 = get(budget, 0, "id");
+  let mut bv: [i64] = crate::ent_u16::one(1);
+  if p >= 0 { bv = crate::bud_vwords::part(budget, p); }
+  let s: [i64] = crate::bud_vwords::field("sessionId", crate::bud_vwords::unpack(sid));
+  return crate::bud_vwords::object(2, cat(s, crate::bud_vwords::field("budgetId", bv)));
+}
+
 fn ref_value(sid: [i64], bid: [i64], budget_first: bool) -> [i64] ! alloc
 {
   let s: [i64] = crate::bud_vwords::field("sessionId", crate::bud_vwords::unpack(sid));
@@ -1470,6 +1480,8 @@ fn attach(inout st: St, sid: [i64], sid_text: str, arg: [i64], now: i64) -> Vec<
   let mut effects: Vec<i64> = vec_new::<i64>();
   if len(snapshot) == 0 { return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects); }
   if len(old_budget) > 0 && !str_is(old_budget, get(old_budget, 0, "state"), "closed") {
+    // The oracle returns the budget's own id value, undefined when absent (HC-10).
+    if len(stale) == 0 { return crate::bud_effect::reply(0, false, raw_ref(sid, old_budget), move effects); }
     return crate::bud_effect::reply(0, false, ref_value(sid, stale, false), move effects);
   }
 
@@ -1970,8 +1982,8 @@ pub fn life(inout st: St, op: i64, rf: [i64], sid: [i64], sid_text: str, arg: [i
     effects = crate::bud_effect::value(move effects, 1, id);
   }
   if op == 4 {
+    // A non-string run key is the empty key, as in the oracle replay and the hand (HC-10).
     if !found { return words_array(crate::bud_effect::reply(0, false, undef, move effects)); }
-    if !has_run { return words_array(crate::bud_effect::reply(2, false, undef, move effects)); }
     effects = crate::bud_effect::value(move effects, 1, id);
   }
   if op == 9 {

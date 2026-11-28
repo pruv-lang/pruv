@@ -132,15 +132,27 @@ the head of this branch). Probe header:
 Table §1: S 0 / D 17 / G 40 (57 rows). Gap rows: M12-01 to M12-11 (11).
 No row is S, so no function was measured and there is no perf_cells.json for this bundle.
 
-## §4 Behaviour differences reported by the table draft (not verified here)
+## §4 Behaviour differences reported by the table draft (checked in HC-10)
 
-The research draft that produced §1 also reported branch and number differences. They are outside this
-reshape and were not reproduced; they are kept here so a later bundle can check them against the M12 Q set.
+The research draft that produced §1 also reported four branch and number differences. HC-10 ran each one
+through the Node oracle (`oracle/`) and both M12 lanes (flat and `--typed`) with the hand harness alongside.
 
-- Clocks::attach 461 vs R:1465: a non-empty, non-closed budget without a string `id` creates a new budget in
-  the hand and returns the existing reference in the lane.
-- Clocks::run 586 vs R:1935: with a current budget and op 4 missing `run`, the hand goes on with an empty key
-  and the lane returns status 2.
-- settle 678 vs T:55: the hand's final clamp is ±(SAFE+1), the lane's is ±SAFE.
-- Store::query hand.rs:859 vs R:843: a valid ref with an op other than 1 or 2 takes the hand's card query; the
-  lane returns status 2 outside 1-3.
+Fixed in the lane (the lane was wrong against the oracle):
+
+- Clocks::attach without a string `id` on a non-empty, non-closed budget: the oracle returns the existing
+  reference `{sessionId, budgetId: budget.id}` (undefined when absent) with no effects. The lane built a ref
+  whose `budgetId` had no value. Both lanes now copy the raw `id` (`bud_vlife::raw_ref`, typed `raw_ref`).
+- Clocks::run op 4 with no `run` key: the oracle accepts it and settles the run. The lane returned status 2;
+  both lanes now use the empty key, as the hand does.
+
+Known differences (not fixed):
+
+- Hand Clocks::attach 461 creates a new budget in the case above. The hand is wrong against the oracle; the
+  hand is a reference port and is not changed by this bundle.
+- A missing `run` and `run: ""` share one key in the lane and the hand; they are distinct Map keys in the
+  oracle. Reachable only when a caller mixes both forms in one session.
+- settle 678 vs T:55: the hand clamps to +-(SAFE+1), the lane to +-SAFE. Past SAFE the oracle gives an unsafe
+  number, which is the excluded domain of KD-M6-1 (spec §8.4); neither clamp is compared there.
+- Store::query hand.rs:859: an op other than 1 or 2 takes the hand's card query, and the lane returns status 2
+  outside 1..3 (the draft's "1..2" is wrong). The oracle API maps query names to 1..3, so other ops exist only
+  in the harness wire format.

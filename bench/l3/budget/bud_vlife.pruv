@@ -104,6 +104,16 @@ fn budget(st: [i64], e: i64) -> [i64] ! alloc
   return crate::ent_u16::slice(st, at, at + crate::bud_map::blob_len(st, e));
 }
 
+// {sessionId, budgetId} with budgetId copied from a budget whose id is not a string (undefined when absent).
+pub fn raw_ref(sid: [i64], budget: [i64]) -> [i64] ! alloc
+{
+  let p: i64 = get(budget, 0, "id");
+  let mut bv: [i64] = crate::ent_u16::one(1);
+  if p >= 0 { bv = part(budget, p); }
+  let s: [i64] = crate::bud_vwords::field("sessionId", crate::bud_vwords::unpack(sid));
+  return crate::bud_vwords::object(2, cat(s, crate::bud_vwords::field("budgetId", bv)));
+}
+
 pub fn ref_value(sid: [i64], bid: [i64], budget_first: bool) -> [i64] ! alloc
 {
   let s: [i64] = crate::bud_vwords::field("sessionId", crate::bud_vwords::unpack(sid));
@@ -147,6 +157,8 @@ fn attach(inout st: [i64], inout clocks: [i64], sid: [i64], arg: [i64], now: i64
   let mut effects: Vec<i64> = vec_new::<i64>();
   if e < 0 { return crate::bud_effect::reply(2, false, crate::ent_u16::one(1), move effects); }
   if len(old_budget) > 0 && !is_text(old_budget, get(old_budget, 0, "state"), "closed") {
+    // The oracle returns the budget's own id value, undefined when absent (HC-10).
+    if len(stale) == 0 { return crate::bud_effect::reply(0, false, raw_ref(sid, old_budget), move effects); }
     return crate::bud_effect::reply(0, false, ref_value(sid, stale, false), move effects);
   }
   // Emit the clear at its original position, but defer the deletion until
@@ -415,7 +427,9 @@ fn clock_call(inout st: [i64], inout clocks: [i64], op: i64, rf: [i64], sid: [i6
   let bn: i64 = rd(bid, 0);
   let sn: i64 = rd(sid, 0);
   let ce: i64 = crate::bud_clock::clock_of(clocks, bid, 1, bn);
-  let rk: [i64] = crate::bud_vwords::packed(arg, get(arg, 0, "run"));
+  // A non-string run key is the empty key, as in the oracle replay and the hand (HC-10).
+  let mut rk: [i64] = crate::bud_vwords::packed(arg, get(arg, 0, "run"));
+  if len(rk) == 0 { rk = crate::ent_u16::one(0); }
   let rn: i64 = rd(rk, 0);
   let waiting: bool = crate::bud_card::truthy(arg, get(arg, 0, "waiting"));
   if op == 5 || op == 6 {
@@ -432,7 +446,6 @@ fn clock_call(inout st: [i64], inout clocks: [i64], op: i64, rf: [i64], sid: [i6
   let found: bool = current(a, bid);
   if op == 4 {
     if !found { return crate::bud_effect::reply(0, false, result, move effects); }
-    if len(rk) == 0 { return crate::bud_effect::reply(2, false, result, move effects); }
     effects = crate::bud_effect::value(move effects, 1, id);
   }
   let was_consuming: bool = crate::bud_store::ef(clocks, ce, 14) == 1;

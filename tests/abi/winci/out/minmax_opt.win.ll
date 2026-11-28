@@ -80,7 +80,7 @@ done:
   ret void
 }
 
-define internal { i1, i64 } @opt_max__pruv_body() {
+define internal { i1, i64 } @opt_max__pruv_body() alwaysinline {
 entry:
   br label %start
 start:
@@ -110,7 +110,7 @@ entry:
   ret void
 }
 
-define internal { i1, i64 } @opt_min__pruv_body() {
+define internal { i1, i64 } @opt_min__pruv_body() alwaysinline {
 entry:
   br label %start
 start:

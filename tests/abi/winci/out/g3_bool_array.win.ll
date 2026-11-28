@@ -8,9 +8,10 @@ target triple = "x86_64-pc-windows-msvc"
 @.str.4 = private unnamed_addr constant [22 x i8] c"pruv_g3_f_5_first_1_b\00"
 @.str.5 = private unnamed_addr constant [13 x i8] c"(len(a) > 0)\00"
 @.str.6 = private unnamed_addr constant [11 x i8] c"first_bool\00"
-@.str.7 = private unnamed_addr constant [21 x i8] c"pruv_g3_f_4_fill_1_b\00"
-@.str.8 = private unnamed_addr constant [25 x i8] c"((0 <= n) && (n <= 100))\00"
-@.str.9 = private unnamed_addr constant [10 x i8] c"fill_bool\00"
+@.str.7 = private unnamed_addr constant [13 x i8] c"array length\00"
+@.str.8 = private unnamed_addr constant [21 x i8] c"pruv_g3_f_4_fill_1_b\00"
+@.str.9 = private unnamed_addr constant [25 x i8] c"((0 <= n) && (n <= 100))\00"
+@.str.10 = private unnamed_addr constant [10 x i8] c"fill_bool\00"
 
 declare noalias nonnull ptr @pruv_raw_alloc_v3(i64, i64, i64) nounwind memory(inaccessiblemem: readwrite)
 declare noalias nonnull ptr @pruv_raw_alloc_zeroed_v3(i64, i64, i64) nounwind memory(inaccessiblemem: readwrite)
@@ -144,6 +145,7 @@ done:
   ret void
 }
 declare void @pruv_check_bool(ptr nocapture readonly, i64) nounwind
+declare void @pruv_panic_repr(i64, ptr) noreturn cold nounwind
 declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind
 
 define internal i128 @pruv_cdiv(i128 %a, i128 %b) {
@@ -206,7 +208,7 @@ c2:
   ret i128 %rr
 }
 
-define internal i1 @pruv_g3_f_5_first_1_b__pruv_body(ptr noalias nocapture readonly %p.a.a, i64 %p.a.n) {
+define internal i1 @pruv_g3_f_5_first_1_b__pruv_body(ptr noalias nocapture readonly %p.a.a, i64 %p.a.n) alwaysinline {
 entry:
   br label %start
 start:
@@ -233,7 +235,7 @@ ok.1:
   ret i1 %t3
 }
 
-define internal i1 @first_bool__pruv_body(ptr noalias nocapture readonly %p.a.a, i64 %p.a.n) {
+define internal i1 @first_bool__pruv_body(ptr noalias nocapture readonly %p.a.a, i64 %p.a.n) alwaysinline {
 entry:
   br label %start
 start:
@@ -260,6 +262,12 @@ ok.1:
 
 define i64 @pruv_abi_first_bool(ptr %a.a.a, i64 %a.a.n) {
 entry:
+  %ln.p0 = icmp ugt i64 %a.a.n, 1099511627776
+  br i1 %ln.p0, label %len.bad.0, label %len.ok.0
+len.bad.0:
+  call void @pruv_panic_repr(i64 %a.a.n, ptr @.str.7)
+  unreachable
+len.ok.0:
   call void @pruv_check_bool(ptr %a.a.a, i64 %a.a.n)
   %r = call i1 @first_bool__pruv_entry(ptr %a.a.a, i64 %a.a.n)
   %rz = zext i1 %r to i64
@@ -268,12 +276,18 @@ entry:
 
 define i64 @pruv_abi_first_bool__typed(ptr %a.a.a, i64 %a.a.n) {
 entry:
+  %ln.p0 = icmp ugt i64 %a.a.n, 1099511627776
+  br i1 %ln.p0, label %len.bad.0, label %len.ok.0
+len.bad.0:
+  call void @pruv_panic_repr(i64 %a.a.n, ptr @.str.7)
+  unreachable
+len.ok.0:
   %r = call i1 @first_bool__pruv_entry(ptr %a.a.a, i64 %a.a.n)
   %rz = zext i1 %r to i64
   ret i64 %rz
 }
 
-define internal { i1, i1 } @head_opt__pruv_body(ptr noalias nocapture readonly %p.a.a, i64 %p.a.n) {
+define internal { i1, i1 } @head_opt__pruv_body(ptr noalias nocapture readonly %p.a.a, i64 %p.a.n) alwaysinline {
 entry:
   br label %start
 start:
@@ -300,6 +314,12 @@ start:
 
 define void @pruv_abi_head_opt(ptr %a.a.a, i64 %a.a.n, ptr %out) {
 entry:
+  %ln.p0 = icmp ugt i64 %a.a.n, 1099511627776
+  br i1 %ln.p0, label %len.bad.0, label %len.ok.0
+len.bad.0:
+  call void @pruv_panic_repr(i64 %a.a.n, ptr @.str.7)
+  unreachable
+len.ok.0:
   call void @pruv_check_bool(ptr %a.a.a, i64 %a.a.n)
   %r = call { i1, i1 } @head_opt__pruv_entry(ptr %a.a.a, i64 %a.a.n)
   %w.1 = extractvalue { i1, i1 } %r, 0
@@ -316,6 +336,12 @@ entry:
 
 define void @pruv_abi_head_opt__typed(ptr %a.a.a, i64 %a.a.n, ptr %out) {
 entry:
+  %ln.p0 = icmp ugt i64 %a.a.n, 1099511627776
+  br i1 %ln.p0, label %len.bad.0, label %len.ok.0
+len.bad.0:
+  call void @pruv_panic_repr(i64 %a.a.n, ptr @.str.7)
+  unreachable
+len.ok.0:
   %r = call { i1, i1 } @head_opt__pruv_entry(ptr %a.a.a, i64 %a.a.n)
   %w.1 = extractvalue { i1, i1 } %r, 0
   %w.2 = zext i1 %w.1 to i64
@@ -329,7 +355,7 @@ entry:
   ret void
 }
 
-define internal { ptr, i64, i64 } @pruv_g3_f_4_fill_1_b__pruv_body(i64 %p.n, i1 %p.v) {
+define internal { ptr, i64, i64 } @pruv_g3_f_4_fill_1_b__pruv_body(i64 %p.n, i1 %p.v) alwaysinline {
 entry:
   %l0.out.a = alloca ptr
   %l0.out.b = alloca i64
@@ -393,14 +419,14 @@ endsc.2:
   %t4 = phi i1 [ false, %start ], [ %t3, %rhs.1 ]
   br i1 %t4, label %ok.3, label %fail.4
 fail.4:
-  call void @pruv_panic_requires(ptr @.str.7, ptr @.str.8)
+  call void @pruv_panic_requires(ptr @.str.8, ptr @.str.9)
   unreachable
 ok.3:
   %t5 = call { ptr, i64, i64 } @pruv_g3_f_4_fill_1_b__pruv_body(i64 %p.n, i1 %p.v)
   ret { ptr, i64, i64 } %t5
 }
 
-define internal { ptr, i64, i64 } @fill_bool__pruv_body(i64 %p.n, i1 %p.v) {
+define internal { ptr, i64, i64 } @fill_bool__pruv_body(i64 %p.n, i1 %p.v) alwaysinline {
 entry:
   %l0.out.a = alloca ptr
   %l0.out.b = alloca i64
@@ -446,7 +472,7 @@ endsc.2:
   %t4 = phi i1 [ false, %start ], [ %t3, %rhs.1 ]
   br i1 %t4, label %ok.3, label %fail.4
 fail.4:
-  call void @pruv_panic_requires(ptr @.str.9, ptr @.str.8)
+  call void @pruv_panic_requires(ptr @.str.10, ptr @.str.9)
   unreachable
 ok.3:
   %t5 = call { ptr, i64, i64 } @fill_bool__pruv_body(i64 %p.n, i1 %p.v)

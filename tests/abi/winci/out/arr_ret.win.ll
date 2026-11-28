@@ -7,6 +7,7 @@ target triple = "x86_64-pc-windows-msvc"
 @.str.3 = private unnamed_addr constant [19 x i8] c"i128 overflow in %\00"
 @.str.4 = private unnamed_addr constant [4 x i8] c"arr\00"
 @.str.5 = private unnamed_addr constant [20 x i8] c"(len(a) <= 1000000)\00"
+@.str.6 = private unnamed_addr constant [13 x i8] c"array length\00"
 
 declare noalias nonnull ptr @pruv_raw_alloc_v3(i64, i64, i64) nounwind memory(inaccessiblemem: readwrite)
 declare noalias nonnull ptr @pruv_raw_alloc_zeroed_v3(i64, i64, i64) nounwind memory(inaccessiblemem: readwrite)
@@ -85,6 +86,7 @@ do:
 done:
   ret void
 }
+declare void @pruv_panic_repr(i64, ptr) noreturn cold nounwind
 declare ptr @pruv_shrink_v2(ptr, i64, i64, i64, i64) nounwind
 
 define internal i128 @pruv_cdiv(i128 %a, i128 %b) {
@@ -147,7 +149,7 @@ c2:
   ret i128 %rr
 }
 
-define internal { ptr, i64, i64 } @arr__pruv_body(ptr noalias nocapture readonly %p.a.a, i64 %p.a.n) {
+define internal { ptr, i64, i64 } @arr__pruv_body(ptr noalias nocapture readonly %p.a.a, i64 %p.a.n) alwaysinline {
 entry:
   %l0.c.a = alloca ptr
   %l0.c.b = alloca i64
@@ -193,6 +195,12 @@ ok.1:
 
 define void @pruv_abi_arr(ptr %a.a.a, i64 %a.a.n, ptr %out) {
 entry:
+  %ln.p0 = icmp ugt i64 %a.a.n, 1099511627776
+  br i1 %ln.p0, label %len.bad.0, label %len.ok.0
+len.bad.0:
+  call void @pruv_panic_repr(i64 %a.a.n, ptr @.str.6)
+  unreachable
+len.ok.0:
   %r = call { ptr, i64, i64 } @arr__pruv_entry(ptr %a.a.a, i64 %a.a.n)
   %x0r = extractvalue { ptr, i64, i64 } %r, 0
   %x1 = extractvalue { ptr, i64, i64 } %r, 1

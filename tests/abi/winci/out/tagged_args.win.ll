@@ -80,7 +80,7 @@ done:
   ret void
 }
 
-define internal i64 @unwrap_or__pruv_body({ i1, i64 } %p.o, i64 %p.d) {
+define internal i64 @unwrap_or__pruv_body({ i1, i64 } %p.o, i64 %p.d) alwaysinline {
 entry:
   br label %start
 start:
@@ -110,7 +110,7 @@ entry:
   ret i64 %r
 }
 
-define internal i64 @res_code__pruv_body({ i1, i64 } %p.r) {
+define internal i64 @res_code__pruv_body({ i1, i64 } %p.r) alwaysinline {
 entry:
   br label %start
 start:

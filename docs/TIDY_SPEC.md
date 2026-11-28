@@ -376,18 +376,30 @@ by byte-identical output and run by group, with the full test suite once before 
       `__pruv_fp` uses the adapter's call count (`pruv-core/src/inline_policy.rs:48,156`).
     Queued, tests/harness bundle (no compiler change, may run beside a compiler bundle):
     - HC-5 `tests/golden.py:212` and `tests/diff_rust.py:280` skip stored keys that were not run this time;
-      `--quick` must fail on requested-but-missing `(seed, index)` keys.
+      `--quick` must fail on requested-but-missing `(seed, index)` keys. Done: `Golden.expect_fuzz` in `tests/golden.py`
+      (used by `diff_rust`, `diff_llvm`, `diff_parse`, `diff_trace`) prints GOLDEN NOT RUN and fails for a requested
+      fuzz input that produced no case, a generator exception included; a forced exception at `(41, 3)` fails.
     - HC-6 `bench/l3/budget/m9_test/run_m9.py:395` returns known-difference for a whole record before the
-      event order and final state are compared; limit it to the number field.
+      event order and final state are compared; limit it to the number field. Done: a `{num}` value now only skips
+      that field (requested delay matches any delay, activeMs, due); X lines, event order and the other final fields
+      are compared. Every M9 Q set (Q3, Q3 clock, Q4, Q4 clock, stale; both lanes) keeps the M9_NOTES counts; a
+      `{num}` delay alone gives known-difference, the same with two timer events swapped gives 121 fails.
     - HC-7 `bench/l3/claude/entry.pruv:10` `parse_line` contract holds for an always-`Skip` body; add the
       success condition for a plain user line and a mutant in `q_mutants.py` that must be rejected by it.
     - HC-8 `.github/workflows/windows-abi.yml:7` path filter omits the compiler, so committed `.win.ll` can go
-      stale; run `tests/abi/winci/prepare.py --check` when ABI codegen changes.
+      stale; run `tests/abi/winci/prepare.py --check` when ABI codegen changes. Done: the filter adds
+      `pruvc-rs/crates/pruv-core/src/**` and `pruvc-rs/crates/pruvc/src/**`; `ci.yml` runs `prepare.py --check
+      --skip-run` on macOS/Linux. The check found all 25 committed `.win.ll` stale (`alwaysinline`, array length
+      guards); `out/` regenerated (`.rs` and `.expected` unchanged). Windows run of the new `.win.ll`: next main push.
     - HC-9 `tests/spec_trace.py:57` does not fail on SPEC sections without any rule ID (10 of 42); add IDs or
-      an explicit exemption list for the example section.
+      an explicit exemption list for the example section. Done: a section without a rule ID now fails unless it is in
+      `EXEMPT_SECTIONS` (the 10 sections of a206043a, closed list; SPEC.md unchanged); a stale entry prints a note.
     - HC-10 four behaviour differences between the budget M12 lane and hand Rust reported by the M12-R table
       draft (attach without id, run op 4 without a run key, settle bound +-(SAFE+1) vs +-SAFE, query op outside
-      1..2; `bench/l3/budget/RESHAPE.md` §4): reproduce each with M12 Q inputs, then fix or record as known.
+      1..2; `bench/l3/budget/RESHAPE.md` §4): reproduce each with M12 Q inputs, then fix or record as known. Done:
+      against the Node oracle the lane was wrong on attach without id (malformed ref) and run op 4 without a run
+      key (status 2); both lanes fixed. Hand attach, the missing-vs-empty run key, the settle clamp (KD-M6-1
+      domain) and query ops outside 1..3 (oracle cannot send them) are known differences in RESHAPE §4.
     Recorded, not queued yet: LLVM `par` per-thread 64 KiB block cache not returned at thread exit
     (`pruvc/runtime.c:208`, `parallel_shim.rs:34`), measure under repeated `par` before a row; trusted
     declarations 7 -> 42 in 14 days (26 in budget), counted at every broad check; uncalled

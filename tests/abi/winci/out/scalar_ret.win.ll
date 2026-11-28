@@ -146,7 +146,7 @@ c2:
   ret i128 %rr
 }
 
-define internal i1 @is_pos__pruv_body(i64 %p.x) {
+define internal i1 @is_pos__pruv_body(i64 %p.x) alwaysinline {
 entry:
   br label %start
 start:
@@ -169,7 +169,7 @@ entry:
   ret i64 %rz
 }
 
-define internal i64 @twice__pruv_body(i64 %p.x) {
+define internal i64 @twice__pruv_body(i64 %p.x) alwaysinline {
 entry:
   br label %start
 start:
@@ -206,7 +206,7 @@ entry:
   ret i64 %r
 }
 
-define internal void @noop__pruv_body(i64 %p.x) {
+define internal void @noop__pruv_body(i64 %p.x) alwaysinline {
 entry:
   br label %start
 start:

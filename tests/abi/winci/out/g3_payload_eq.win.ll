@@ -149,7 +149,7 @@ c2:
   ret i128 %rr
 }
 
-define internal { i1, i1 } @pruv_g3_f_4_same_1_ob__pruv_body({ i1, i1 } %p.a, { i1, i1 } %p.b) {
+define internal { i1, i1 } @pruv_g3_f_4_same_1_ob__pruv_body({ i1, i1 } %p.a, { i1, i1 } %p.b) alwaysinline {
 entry:
   br label %start
 start:
@@ -188,7 +188,7 @@ ok.1:
   ret { i1, i1 } %t18
 }
 
-define internal { i1, i1, i64 } @pruv_g3_f_4_same_1_rb__pruv_body({ i1, i1, i64 } %p.a, { i1, i1, i64 } %p.b) {
+define internal { i1, i1, i64 } @pruv_g3_f_4_same_1_rb__pruv_body({ i1, i1, i64 } %p.a, { i1, i1, i64 } %p.b) alwaysinline {
 entry:
   br label %start
 start:
@@ -238,7 +238,7 @@ ok.1:
   ret { i1, i1, i64 } %t29
 }
 
-define internal { i1, i1 } @same_opt__pruv_body({ i1, i1 } %p.a, { i1, i1 } %p.b) {
+define internal { i1, i1 } @same_opt__pruv_body({ i1, i1 } %p.a, { i1, i1 } %p.b) alwaysinline {
 entry:
   br label %start
 start:
@@ -311,7 +311,7 @@ entry:
   ret void
 }
 
-define internal { i1, i1, i64 } @same_res__pruv_body({ i1, i1, i64 } %p.a, { i1, i1, i64 } %p.b) {
+define internal { i1, i1, i64 } @same_res__pruv_body({ i1, i1, i64 } %p.a, { i1, i1, i64 } %p.b) alwaysinline {
 entry:
   br label %start
 start:

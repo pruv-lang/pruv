@@ -153,6 +153,11 @@ jobs:
         if: runner.os != 'Windows'
         run: python tests/m3_all.py --quick --log-dir m3-logs
 
+      # The Windows ABI job (windows-abi.yml) runs the committed out/*.win.ll; fail when they no longer match the compiler.
+      - name: Windows ABI inputs are up to date (prepare.py --check)
+        if: runner.os != 'Windows'
+        run: python tests/abi/winci/prepare.py --check --skip-run
+
       # ---------- Tests: Windows (no linking; see the header comment) ----------
       - name: run_all must_reject (Windows)
         if: runner.os == 'Windows'
