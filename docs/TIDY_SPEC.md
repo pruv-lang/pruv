@@ -403,6 +403,15 @@ by byte-identical output and run by group, with the full test suite once before 
       of claude `q_root` unchanged (about 21 s) and the generated Rust is identical. Gap left: a general plain user
       line (`{"type":"user",...}`) is not yet proved Object; that needs acceptance facts for strings, keys and
       member loops in `pkgs/parse`.
+      Done (HC-12): quantifier-free acceptance facts for a four-byte string token (`parse::str4`:
+      `string_token_valid`, `record`, `child`), one object member `"....":"...."` (`parse::member4`: `member`, the
+      `container` loop) and fifteen ASCII bytes (`lex::ascii15`: `validate_utf8`), carried up through
+      `open_container`, `scan_records`, `scan_document` and `parse` (object root). `parse_line` ensures the plain
+      user line `{"type":"user"}` is `Line::Object`; q_mutants mutant 20 (skip every line longer than `{}`) is
+      proof-rejected at that ensures (q_mutants rc=0: 8 detected, 12 proof-rejected). Generated Rust of claude `q_root` identical. Proof time of claude `q_root` grew past
+      20% (alternating runs under load 5-9, orig/new s: 21.8/24.9, 21.1/26.5, 52.7/34.8, 21.8/25.6, 26.6/34.7,
+      21.3/39.6; medians 21.8 -> 30.6). Gap left: a user line with more members, longer or escaped strings, or
+      non-ASCII text is not proved Object (each needs a length-generic string fact, i.e. a quantifier).
     - HC-8 `.github/workflows/windows-abi.yml:7` path filter omits the compiler, so committed `.win.ll` can go
       stale; run `tests/abi/winci/prepare.py --check` when ABI codegen changes. Done: the filter adds
       `pruvc-rs/crates/pruv-core/src/**` and `pruvc-rs/crates/pruvc/src/**`; `ci.yml` runs `prepare.py --check
@@ -428,6 +437,12 @@ by byte-identical output and run by group, with the full test suite once before 
     - HC-12 `bench/l3/claude/q_mutants.py` exits 1: mutants 1, 5, 9-12, 17 and 18 are stale (their source snippet
       no longer exists at HEAD), so they test nothing. Re-anchor each to the current source or drop it with a reason;
       a stale mutant must fail the run loudly but must not hide the others. Found in HC-11 (mutant 19 is fine).
+      Done: all eight re-anchored, none dropped. The drafts ring (`(c.begun - 1) % 200`) became a vector whose last
+      element is the current draft, and the root keys became `k[4]`; 1 (isMeta inverted, `k[4]`), 5 (lastAt
+      maximum, on `Some(b) => { last = iso.at; }`), 9 (`len(d.reply) > 0` separator), 10 (`room` from
+      `len(d.reply)`), 11 and 18 (answer guards on the last draft), 12 (`put_turns` index `len(c.drafts) - kept +
+      j`), 17 (tool writes the previous draft). Outcomes: 1, 5, 12 detected; 9, 10, 11, 17, 18 proof-rejected
+      (10 as verify_unknown). A stale mutant is already reported as `stale` with exit 1 while the others still run.
     Recorded, not queued yet: LLVM `par` per-thread 64 KiB block cache not returned at thread exit
     (`pruvc/runtime.c:208`, `parallel_shim.rs:34`), measure under repeated `par` before a row; trusted
     declarations 7 -> 42 in 14 days (26 in budget), counted at every broad check; uncalled

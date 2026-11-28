@@ -12,6 +12,7 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
   ensures result == -1 || (start <= result && result < end)
   ensures result == -1 ==> utf8_valid_span(input, start, end)
   ensures (end - start == 2 && input[start] < 128 && input[start + 1] < 128) ==> result == -1
+  ensures (end - start == 15 && ascii15(input, start)) ==> result == -1
 {
   // 4.4zc (4.4l-VU): the shape of std `run_utf8_validation`: one loop; an ASCII byte at an 8-aligned offset starts
   // the skip of all-ASCII 16-byte blocks (two word loads and a mask test) and then
@@ -59,6 +60,12 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
     }
   }
   return -1;
+}
+
+// HC-7: bytes s..s+15 are ASCII, written out without a quantifier (a `forall` acceptance ensures here made
+// lines::parse_range time out in HC-11).
+pub pred fn ascii15(input: [u8], s: i64) -> bool {
+  return 0 <= s && s + 15 <= len(input) && input[s] < 128 && input[s + 1] < 128 && input[s + 2] < 128 && input[s + 3] < 128 && input[s + 4] < 128 && input[s + 5] < 128 && input[s + 6] < 128 && input[s + 7] < 128 && input[s + 8] < 128 && input[s + 9] < 128 && input[s + 10] < 128 && input[s + 11] < 128 && input[s + 12] < 128 && input[s + 13] < 128 && input[s + 14] < 128;
 }
 
 // std's two-word test `(block | block2) & NONASCII_MASK == 0`: bytes i..i+16 are all ASCII (two unaligned

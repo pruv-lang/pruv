@@ -33,27 +33,36 @@ def load_test():
 
 
 # ---- mutants: (id, file, description, old, new) -------------------------------------------------------------
-M5_OLD = 'last = copy(iso.text);'
-M5_NEW = '''let mut keep: bool = true;
-                if has_at && len(last) == 24 && len(iso.text) == 24 {
-                  let mut q: i64 = 0;
-                  let mut fin: bool = false;
-                  while q < 24 && !fin
-                    invariant 0 <= q && q <= 24 && len(last) == 24 && len(iso.text) == 24
-                    decreases 24 - q
-                  {
-                    let ca: i64 = iso.text[q];
-                    let cb: i64 = last[q];
-                    if ca != cb { fin = true; keep = ca > cb; }
-                    q = q + 1;
+M5_OLD = 'Some(b) => { last = iso.at; }'
+M5_NEW = '''Some(b) => {
+                  let mut keep: bool = true;
+                  match last {
+                    Some(p) => {
+                      let mut q: i64 = 0;
+                      let mut fin: bool = false;
+                      while q < 24 && !fin
+                        invariant 0 <= q && q <= 24
+                        decreases 24 - q
+                      {
+                        let ca: u8 = b[q];
+                        let cb: u8 = p[q];
+                        if ca != cb { fin = true; keep = ca > cb; }
+                        q = q + 1;
+                      }
+                    }
+                    None => {}
                   }
-                }
-                if keep { last = copy(iso.text); }'''
+                  if keep { last = iso.at; }
+                }'''
+
+# Mutants 11 and 18 guard answer (not tool, which starts the same way) on the current (last) draft.
+ANSWER_HEAD = '  if !c.active { return; }\n  let k: i64 = len(c.drafts) - 1;\n  match vec_at_mut::<Draft>(inout c.drafts, k) {\n    Some(d) => {\n      match at'
+TOOL_HEAD = 'let k: i64 = len(c.drafts) - 1;\n  match vec_at_mut::<Draft>(inout c.drafts, k) {\n    Some(d) => {\n      if d.tools'
 
 MUTANTS = [
  (1, 'entry.pruv', 'invert the exact-true isMeta filter in user_text',
-  'let meta: i64 = true_of(doc, k.meta);\n  if meta < 0 { return Field::Defect(meta); }\n  if meta == 1 { return Field::Missing; }',
-  'let meta: i64 = true_of(doc, k.meta);\n  if meta < 0 { return Field::Defect(meta); }\n  if meta == 0 { return Field::Missing; }'),
+  'let meta: i64 = true_of(doc, k[4]);\n  if meta < 0 { return Field::Defect(meta); }\n  if meta == 1 { return Field::Missing; }',
+  'let meta: i64 = true_of(doc, k[4]);\n  if meta < 0 { return Field::Defect(meta); }\n  if meta == 0 { return Field::Missing; }'),
  (2, 'entry.pruv', 'remove the any-position tool_result veto (a tool_result block is just ignored)',
   'Block::Veto => { return Field::Missing; }', 'Block::Veto => {}'),
  (3, 'import.pruv', 'allow synthetic non-error replies (drop the isApiErrorMessage requirement)',
@@ -70,14 +79,14 @@ MUTANTS = [
  (8, 'pkg_framing/framing.pruv', 'accept the short incomplete tail of a window as an entry',
   '  }\n  return Frame::Done;\n}', '  }\n  return Frame::Entry(offset, len(data), len(data));\n}'),
  (9, 'turns.pruv', 'remove the "\\n\\n" separator between reply pieces',
-  'if rl > 0 { sep = 2; }', 'if rl > 0 { sep = 0; }'),
+  'if len(d.reply) > 0 { sep = 2; }', 'if len(d.reply) > 0 { sep = 0; }'),
  (10, 'turns.pruv', 'use the actual reply length instead of the saturated reply budget',
-  'let used: i64 = d.used;', 'let used: i64 = len(d.reply);'),
+  'let room: i64 = 32768 - d.used;', 'let room: i64 = 32768 - len(d.reply);'),
  (11, 'turns.pruv', 'block replies (and completedAt) after the prompt was clipped',
-  '  if !c.active { return; }\n  let k: i64 = (c.begun - 1) % 200;\n  let m: i64 = len(at);',
-  '  if !c.active || vec_get::<Draft>(c.drafts, (c.begun - 1) % 200).clipped { return; }\n  let k: i64 = (c.begun - 1) % 200;\n  let m: i64 = len(at);'),
+  ANSWER_HEAD,
+  ANSWER_HEAD.replace('if !c.active {', 'if !c.active || vec_get::<Draft>(c.drafts, len(c.drafts) - 1).clipped {')),
  (12, 'turns.pruv', 'reverse the suffix order in put_turns (newest turn first)',
-  'let w: i64 = (b - 1 - j) % 200;\n    let plen', 'let w: i64 = (b - kept + j) % 200;\n    let plen'),
+  'let w: i64 = len(c.drafts) - 1 - j;', 'let w: i64 = len(c.drafts) - kept + j;'),
  (13, 'turns.pruv', 'plan uses >= at the inclusive 2097152 total cap',
   'if total + size > 2097152 {', 'if total + size >= 2097152 {'),
  (14, 'import.pruv', 'omittedBefore from oversize loss (lost_before) instead of cut_before || trimmed',
@@ -86,17 +95,19 @@ MUTANTS = [
   'if v < 100000000000 {', 'if v < 10000000000 {'),
  (16, 'boundary.pruv', 'unsafe packet index: tiled reads the completedAt length one record too far',
   'packet[18 + 10 * i + 7], cur);', 'packet[18 + 10 * i + 10], cur);'),
- (17, 'turns.pruv', 'state-frame violation: tool writes the tools counter of the next slot, not the current one',
-  'let k: i64 = (c.begun - 1) % 200;\n  match vec_at_mut::<Draft>(inout c.drafts, k) {\n    Some(d) => {\n      if d.tools',
-  'let k: i64 = c.begun % 200;\n  match vec_at_mut::<Draft>(inout c.drafts, k) {\n    Some(d) => {\n      if d.tools'),
+ (17, 'turns.pruv', 'state-frame violation: tool writes the tools counter of the previous draft, not the current one',
+  TOOL_HEAD, TOOL_HEAD.replace('len(c.drafts) - 1;', 'len(c.drafts) - 2;')),
  (18, 'turns.pruv', 'stop updating completedAt once the reply budget is full',
-  '  if !c.active { return; }\n  let k: i64 = (c.begun - 1) % 200;\n  let m: i64 = len(at);',
-  '  if !c.active || vec_get::<Draft>(c.drafts, (c.begun - 1) % 200).used >= 32768 { return; }\n  let k: i64 = (c.begun - 1) % 200;\n  let m: i64 = len(at);'), (19, 'entry.pruv', 'parse_line always returns Skip (an accepted line is dropped)',
+  ANSWER_HEAD,
+  ANSWER_HEAD.replace('if !c.active {', 'if !c.active || vec_get::<Draft>(c.drafts, len(c.drafts) - 1).used >= 32768 {')),
+ (19, 'entry.pruv', 'parse_line always returns Skip (an accepted line is dropped)',
   'return Line::Object(document);', 'return Line::Skip;'),
+ (20, 'entry.pruv', 'parse_line skips every line longer than `{}` (a plain user line is dropped)',
+  'if n > crate::json::limit_input_bytes() { return Line::Skip; }', 'if n > 2 { return Line::Skip; }'),
 ]
 
 # Notes only; the real outcome is always measured.
-EXPECTED = {4: 'proof-rejected', 19: 'proof-rejected', 7: 'proof-rejected', 8: 'proof-rejected', 9: 'proof-rejected', 11: 'proof-rejected',
+EXPECTED = {4: 'proof-rejected', 19: 'proof-rejected', 20: 'proof-rejected', 7: 'proof-rejected', 8: 'proof-rejected', 9: 'proof-rejected', 11: 'proof-rejected',
             13: 'proof-rejected', 15: 'proof-rejected', 16: 'proof-rejected', 17: 'proof-rejected'}
 # A mutant that is genuinely equivalent would be listed here as id -> one-line argument (none is assumed).
 EQUIVALENT = {}
