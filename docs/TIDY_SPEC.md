@@ -376,7 +376,9 @@ by byte-identical output and run by group, with the full test suite once before 
       `__pruv_fp` uses the adapter's call count (`pruv-core/src/inline_policy.rs:48,156`).
     Queued, tests/harness bundle (no compiler change, may run beside a compiler bundle):
     - HC-5 `tests/golden.py:212` and `tests/diff_rust.py:280` skip stored keys that were not run this time;
-      `--quick` must fail on requested-but-missing `(seed, index)` keys.
+      `--quick` must fail on requested-but-missing `(seed, index)` keys. Done: `Golden.expect_fuzz` in `tests/golden.py`
+      (used by `diff_rust`, `diff_llvm`, `diff_parse`, `diff_trace`) prints GOLDEN NOT RUN and fails for a requested
+      fuzz input that produced no case, a generator exception included; a forced exception at `(41, 3)` fails.
     - HC-6 `bench/l3/budget/m9_test/run_m9.py:395` returns known-difference for a whole record before the
       event order and final state are compared; limit it to the number field.
     - HC-7 `bench/l3/claude/entry.pruv:10` `parse_line` contract holds for an always-`Skip` body; add the

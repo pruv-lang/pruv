@@ -739,6 +739,8 @@ def main(argv):
             args, golden_default_name(flag_toks),
             "diff_trace%s: Rust pruv-trace-dump trace per (group, input)" % (
                 " " + " ".join(flag_toks) if flag_toks else ""))
+        if "fuzz" in selected:
+            gold.expect_fuzz(args.seeds, args.fuzz_count)   # a generator exception is a failure, not a silent skip
     label = " ".join(flag_toks) or "default"
 
     t0 = time.time()

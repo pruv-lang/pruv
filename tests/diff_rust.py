@@ -602,6 +602,8 @@ def main(argv):
         gold = golden.Golden.from_args(
             args, "diff_rust.txt", "diff_rust: Rust source (pruv-rust-dump) per (group, input, mode)", tmp_dirs=[tmp])
         use_gold = (not vs_py) or args.update_golden
+        if "fuzz" in selected:
+            gold.expect_fuzz(args.seeds, args.fuzz_count)   # a generator exception is a failure, not a silent skip
         used_keys = set()
         per, notes = build_inputs(set(selected), args, tmp)
         problems = []

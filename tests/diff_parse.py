@@ -714,6 +714,8 @@ def main(argv):
         gold = golden.Golden.from_args(
             args, "diff_parse_%s.txt" % args.mode,
             "diff_parse %s: Rust pruv-%s-dump line per (group, input)" % (args.mode, args.mode))
+        if "fuzz" in selected:
+            gold.expect_fuzz(args.seeds, args.fuzz_count)   # a generator exception is a failure, not a silent skip
     keys = {}
     status_cols = STATUSES if vs_py else GOLDEN_STATUSES
 

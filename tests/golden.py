@@ -22,12 +22,15 @@ Usage in a tool:
     import golden
     golden.add_args(ap)                                   # --golden PATH, --update-golden, --prune-golden
     g = golden.Golden.from_args(args, default_path, "diff_rust: Rust source per (input, mode)")
+    g.expect_fuzz(args.seeds, args.fuzz_count)            # optional: (seed, index) inputs that must produce a case
     g.check(key, text, summary)                           # once per case
     ok = g.finish()                                       # prints the report; writes the file with --update-golden
 
 Rules
   - Check mode (default): a case whose digest differs from the file, or a case missing from the file, is a failure.
-    Keys in the file that this run did not produce are fine (a --quick run produces a subset).
+    Keys in the file that this run did not produce are fine (a --quick run produces a subset), except requested
+    ones: an input prefix given to expect() / expect_fuzz() (e.g. "fuzz|fuzz:41:3") that produced no case this run
+    (a generator exception, a dropped input) is printed as GOLDEN NOT RUN and is a failure, also with --update-golden.
   - --update-golden: rewrite the file with this run's cases (keys not produced by this run are kept, unless
     --prune-golden is also given) and print every CHANGED / NEW / REMOVED key. Exit status is still 0 for these.
   - Normalization removes what depends on the machine: the repo root and temporary directories become <ROOT> and
@@ -200,11 +203,31 @@ class Golden:
         self.seen = {}
         self.mismatch = []   # (key, saved (digest, summary), new (digest, summary))
         self.missing = []    # (key, new)
+        self.expected = []   # input prefixes "<group>|<input>" that must produce at least one case
 
     @classmethod
     def from_args(cls, args, default_name, description, tmp_dirs=()):
         path = args.golden or os.path.join(GOLDEN_DIR, default_name)
         return cls(path, os.path.basename(path), description, args.update_golden, args.prune_golden, tmp_dirs)
+
+    def expect(self, prefix):
+        """Require at least one case whose key starts with prefix + "|" (prefix = "<group>|<input>")."""
+        self.expected.append(_clean(prefix, 1000))
+
+    def expect_fuzz(self, seeds, count, group="fuzz"):
+        """Require a case for every requested fuzzer (seed, index): the input name is "fuzz:<seed>:<index>"."""
+        for seed in seeds:
+            for idx in range(count):
+                self.expect("%s|fuzz:%s:%d" % (group, seed, idx))
+
+    def not_run(self):
+        """Expected input prefixes that produced no case this run."""
+        done = set()
+        for k in self.seen:
+            parts = k.split("|")
+            for i in range(1, len(parts)):
+                done.add("|".join(parts[:i]))
+        return [p for p in self.expected if p not in done]
 
     def add_tmp(self, d):
         self.tmp_dirs.append(d)
@@ -245,6 +268,9 @@ class Golden:
         """Print the report; with --update-golden write the file. -> True when the run matches (or was updated)."""
         out = out or sys.stdout
         rel = os.path.relpath(self.path, ROOT).replace(os.sep, "/")
+        not_run = self.not_run()
+        for p in not_run[:MAX_SHOWN]:
+            out.write("GOLDEN NOT RUN %s: requested but produced no case (generator exception or dropped input)\n" % p)
         if self.update:
             rows = dict(self.saved)
             removed = []
@@ -263,15 +289,17 @@ class Golden:
             self._write(rows)
             out.write("golden %s updated: %d cases this run, %d changed, %d new, %d removed, %d total\n" % (
                 rel, len(self.seen), len(changed), len(self.missing), len(removed), len(rows)))
-            return True
+            if not_run:
+                out.write("golden %s: %d requested inputs not run\n" % (rel, len(not_run)))
+            return not not_run
         for k, o, n in self.mismatch[:MAX_SHOWN]:
             out.write("GOLDEN MISMATCH %s: saved %s (%s), now %s (%s)\n" % (k, o[0], o[1], n[0], n[1]))
         for k, n in self.missing[:MAX_SHOWN]:
             out.write("GOLDEN MISSING %s: now %s (%s)\n" % (k, n[0], n[1]))
         bad = len(self.mismatch) + len(self.missing)
-        out.write("golden %s: %d cases checked, %d match, %d mismatch, %d missing\n" % (
-            rel, len(self.seen), len(self.seen) - bad, len(self.mismatch), len(self.missing)))
+        out.write("golden %s: %d cases checked, %d match, %d mismatch, %d missing, %d requested inputs not run\n" % (
+            rel, len(self.seen), len(self.seen) - bad, len(self.mismatch), len(self.missing), len(not_run)))
         if bad:
             out.write("  if the change is intended: rerun with --update-golden (prints every changed key) and commit "
                       "the file; to see the output use the tool's --save-dir\n")
-        return bad == 0
+        return bad == 0 and not not_run
