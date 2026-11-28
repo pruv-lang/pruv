@@ -125,7 +125,7 @@ the head of this branch). Probe header:
 | M12-08 | `Clock { runs: Vec<(Text, bool)> }` as a map value (334-343); `tool_seen: Vec<(Text, Vec<Text>)>` (345) | `HashMap<String, Clock { owner: String, runs: Vec<Run>, .. }>`: `foreign_owned_type` "String-keyed maps require .. owned aggregate values" (the same Clock with `runs: Vec<i64>` passes); `Vec<Seen { turn: [u16], activities: Vec<Key { units: [u16] } > }>`: `foreign_owned_type` "recursive or holds an array/str" | Clocks::clock_of/drop_clock/forget/dispose/seed_tool/observe, run |
 | M12-09 | `Float(u64)` variant (40, 62, 84) | `enum Num { Float(bits: u64), .. }`: `type/small_int_unsupported` "non-i64 integer enum payloads require P11" | Value::decode/read/write/encode/truthy, Effects::value/reply, call_words |
 | M12-10 | `impl FnOnce(&mut Self)` and `impl FnOnce(&mut Vec<i64>)` parameters (134, 303) | no function-typed parameter: `fn apply(f: fn(i64) -> i64, ..)` is `parse/syntax` "expected identifier, found 'fn'" | Value::edit_object, Effects::push/value, begin |
-| M12-11 | `pub fn reference(sid: &[u16], ..)` (660) | `pub fn reference(sid: [u16])`: `parse/small_int_unsupported` "[u16] at the host boundary is bundle P12" | reference |
+| M12-11 | `pub fn reference(sid: &[u16], ..)` (660) | `pub fn reference(sid: [u16])`: `parse/small_int_unsupported` "[u16] at the host boundary is bundle P12". Done: P12a (2026-11-29, R-6p-6) compiles `pub fn reference(sid: [u16], ..)` to `pub fn reference(sid: &[u16], ..)` on the Rust backend; the budget lane is not rewritten here | reference |
 
 ## §3 Counts
 

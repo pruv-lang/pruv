@@ -1,0 +1,3 @@
+pub fn bump(inout x: u8) -> () {
+  x = 0;
+}

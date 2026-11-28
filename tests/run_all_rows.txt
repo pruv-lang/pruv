@@ -3235,6 +3235,8 @@
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_local_view.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_two_sources.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_13_iw_whole.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_accept.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": ["--no-verify"], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_requires.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--proven-entries"], "group": "runtime", "mode": null, "sample": "tests/runtime/p9b_rt_proven.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers", "--contract-budget", "1000"], "group": "runtime", "mode": null, "sample": "tests/runtime/g9_r21_contract_size_pass.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": ["--trust-callers", "--foreign-checks", "off"], "group": "runtime", "mode": null, "sample": "tests/runtime/g10p_r19_requires_off.pruv"}
@@ -4187,7 +4189,12 @@
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_local_view.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_11_two_sources.pruv"}
 {"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6g_13_iw_whole.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_accept.pruv"}
+{"backend": "rust", "compiler": "rs", "flags": [], "group": "runtime", "mode": null, "sample": "tests/spec/r6p_6_host_requires.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "/tmp/pruv_p1_pub_sig_bindings.rs"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_pub_sig.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "/tmp/pruv_p2_u16_pub_sig_bindings.rs"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_u16_pub_sig.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "/tmp/pruv_p6_llvm_owned_bindings.rs"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p6_llvm_owned.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "obj"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_scalar_i32.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--emit", "exe"], "group": "g8_frontend", "mode": "exe", "only_compiler": "rs", "sample": "tests/g8/frontend/catalog/root.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--emit", "exe"], "group": "g8_frontend", "mode": "exe", "only_compiler": "rs", "sample": "tests/g8/frontend/child_calls/root.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--emit", "exe"], "group": "g8_frontend", "mode": "exe", "only_compiler": "rs", "sample": "tests/g8/frontend/import_only/root.pruv"}
@@ -5353,7 +5360,6 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_refine_wide.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_refined_store.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_return_mismatch.pruv"}
-{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_scalar_i32.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_store_index.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_store_then_read.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_sum_bool.pruv"}
@@ -6082,6 +6088,7 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps9_str_bytes_len.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps9_views_subview_len.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/lgaps9_views_subview_sum.pruv"}
+{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p12a_inout_u8_entry.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_add_overflow.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_bit_and.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_cast_in_contract.pruv"}
@@ -6094,7 +6101,6 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_mixed_width.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_neg.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_par_cast.pruv"}
-{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_pub_sig.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_sub_underflow.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p1_u32.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_bits_arity.pruv"}
@@ -6110,7 +6116,6 @@
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_u16_find.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_u16_index.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_u16_mixed_append.pruv"}
-{"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_u16_pub_sig.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_u16_store_range.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_u16_vec.pruv"}
 {"backend": null, "compiler": "rs", "flags": [], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_word_index.pruv"}

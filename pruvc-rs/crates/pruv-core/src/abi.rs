@@ -515,7 +515,7 @@ pub fn abi_of(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mod) -> R
 /// Python `abi_of(f, tt, m, target)`: `callee` is the internal function the wrapper calls, `entry` (checked, legacy) or
 /// `body` (G4 explicit mode when the host boundary needs no requires check). The representation checks run in every mode.
 pub fn abi_of_target(f: &Function, tt: &TypeTable, target: AbiTarget, m: &mut Mod, callee: &str) -> R<String> {
-    if crate::emit_common::has_narrow_scalar_sig(f, tt) {
+    if crate::emit_common::has_llvm_unsupported_int_sig(f, tt, false) {
         return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
     }
     // G5 A3: defensive; an inout function is host-visible only as an explicit-mode host entry (the caller filters host)

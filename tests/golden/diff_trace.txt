@@ -628,7 +628,7 @@ must_reject|tests/must_reject/g2a_param_store.pruv	1 case: obl=0 1	default=01123
 must_reject|tests/must_reject/g2a_refine_wide.pruv	1 case: obl=0 1	default=6cb12c506560
 must_reject|tests/must_reject/g2a_refined_store.pruv	1 case: obl=8 1	default=bc5ec8c5668c
 must_reject|tests/must_reject/g2a_return_mismatch.pruv	1 case: obl=0 1	default=e7b0153d41e8
-must_reject|tests/must_reject/g2a_scalar_i32.pruv	1 case: obl=0 1	default=6bd516cc84cc
+must_reject|tests/must_reject/g2a_scalar_i32.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 must_reject|tests/must_reject/g2a_scalar_u8.pruv	1 case: obl=0 1	default=3acdd621fd78
 must_reject|tests/must_reject/g2a_store_index.pruv	1 case: obl=4 1	default=6df478858fc3
 must_reject|tests/must_reject/g2a_store_then_read.pruv	1 case: obl=7 1	default=9d93f6b49df8
@@ -1307,6 +1307,7 @@ must_reject|tests/must_reject/lgaps9_str_bytes_escape.pruv	1 case: obl=0 1	defau
 must_reject|tests/must_reject/lgaps9_str_bytes_len.pruv	1 case: obl=1 1	default=c1c8253b5814
 must_reject|tests/must_reject/lgaps9_views_subview_len.pruv	1 case: obl=5 1	default=b664f1052678
 must_reject|tests/must_reject/lgaps9_views_subview_sum.pruv	1 case: obl=5 1	default=520fbd25b7f7
+must_reject|tests/must_reject/p12a_inout_u8_entry.pruv	1 case: obl=0 1	default=c7ad0618823e
 must_reject|tests/must_reject/p1_add_overflow.pruv	1 case: obl=1 1	default=e1d17f5d2eac
 must_reject|tests/must_reject/p1_bit_and.pruv	1 case: obl=0 1	default=ce42aa03fda7
 must_reject|tests/must_reject/p1_cast_in_contract.pruv	1 case: obl=0 1	default=0403482cabf8
@@ -1319,7 +1320,7 @@ must_reject|tests/must_reject/p1_literal_range.pruv	1 case: obl=0 1	default=9438
 must_reject|tests/must_reject/p1_mixed_width.pruv	1 case: obl=0 1	default=31dc84e1ce33
 must_reject|tests/must_reject/p1_neg.pruv	1 case: obl=0 1	default=9abb48b5da0f
 must_reject|tests/must_reject/p1_par_cast.pruv	1 case: obl=0 1	default=3c8bad50f547
-must_reject|tests/must_reject/p1_pub_sig.pruv	1 case: obl=0 1	default=dde95d0b1b03
+must_reject|tests/must_reject/p1_pub_sig.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 must_reject|tests/must_reject/p1_sub_underflow.pruv	1 case: obl=1 1	default=30d88bc86bcf
 must_reject|tests/must_reject/p1_u16_array.pruv	1 case: obl=0 1	default=ca925a52791b
 must_reject|tests/must_reject/p1_u32.pruv	1 case: obl=0 1	default=a82356911489
@@ -1336,7 +1337,7 @@ must_reject|tests/must_reject/p2_u16_fill_range.pruv	1 case: obl=2 1	default=850
 must_reject|tests/must_reject/p2_u16_find.pruv	1 case: obl=0 1	default=f809d984f6a3
 must_reject|tests/must_reject/p2_u16_index.pruv	1 case: obl=1 1	default=b498d605a318
 must_reject|tests/must_reject/p2_u16_mixed_append.pruv	1 case: obl=0 1	default=a8c7c5e160f0
-must_reject|tests/must_reject/p2_u16_pub_sig.pruv	1 case: obl=0 1	default=4fad9539bd3e
+must_reject|tests/must_reject/p2_u16_pub_sig.pruv	1 case: obl=0 1	default=c0f6163aeb7a
 must_reject|tests/must_reject/p2_u16_store_range.pruv	1 case: obl=2 1	default=3e6ef9ff605a
 must_reject|tests/must_reject/p2_u16_vec.pruv	1 case: obl=0 1	default=8b4615373ad4
 must_reject|tests/must_reject/p2_word_index.pruv	1 case: obl=1 1	default=c9f88e8f86cd
@@ -1364,7 +1365,7 @@ must_reject|tests/must_reject/p3_lit_u64.pruv	1 case: obl=0 1	default=4e89b5453f
 must_reject|tests/must_reject/p3_mix.pruv	1 case: obl=0 1	default=a13decaad042
 must_reject|tests/must_reject/p3_mul_i8.pruv	1 case: obl=1 1	default=cb16c3158ce0
 must_reject|tests/must_reject/p3_neg_i32.pruv	1 case: obl=0 1	default=43c6dc337bf8
-must_reject|tests/must_reject/p3_pub_u64.pruv	1 case: obl=0 1	default=1fbe619466cb
+must_reject|tests/must_reject/p3_pub_u64.pruv	1 case: obl=0 1	default=36cdea5de3cd
 must_reject|tests/must_reject/p3_sub_i16.pruv	1 case: obl=1 1	default=e159d559d42a
 must_reject|tests/must_reject/p3_sub_u64.pruv	1 case: obl=1 1	default=807cede67b11
 must_reject|tests/must_reject/p3_vec_idx.pruv	1 case: obl=0 1	default=4457a1c832df

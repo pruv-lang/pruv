@@ -1571,7 +1571,7 @@ impl Parser {
             }
             self.impl_owner = Some(ot.val.clone());
             self.impl_tparams = tparams.clone();
-            let r = self.function(None, false);
+            let r = self.function(None);
             self.impl_owner = None;
             self.impl_tparams = Vec::new();
             let mut f = r?;
@@ -1683,7 +1683,7 @@ impl Parser {
                 self.items.push(Item::Ty(p.types.len() - 1));
             } else if self.at("extern", 0) {
                 let tok = self.next();
-                self.function(Some(tok.clone()), is_pub)?;
+                self.function(Some(tok.clone()))?;
                 return Err(self.reserved_name(&tok));
             } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "trusted" {
                 // G6 A0: `trusted rust fn name(..) -> T ensures .. = "::path";`
@@ -1704,14 +1704,14 @@ impl Parser {
                 }
                 self.bump();
                 self.bump();
-                let f = self.function(Some(t), false)?;
+                let f = self.function(Some(t))?;
                 self.fn_pub.push(false);
                 p.functions.push(f);
                 self.items.push(Item::Fn(p.functions.len() - 1));
             } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "opaque" && self.at("fn", 1) {
                 // P13o: `opaque fn` keeps its body out of contracts until `reveal`
                 self.bump();
-                let mut f = self.function(None, is_pub)?;
+                let mut f = self.function(None)?;
                 f.opaque = true;
                 self.fn_pub.push(is_pub);
                 p.functions.push(f);
@@ -1722,7 +1722,7 @@ impl Parser {
                 // R-6o-5: `opaque pred fn` is a contract-only predicate (its body may quantify) kept opaque until `reveal`
                 self.bump();
                 self.bump();
-                let mut f = self.function(None, is_pub)?;
+                let mut f = self.function(None)?;
                 f.opaque = true;
                 f.pred = true;
                 self.fn_pub.push(is_pub);
@@ -1730,7 +1730,7 @@ impl Parser {
                 self.items.push(Item::Fn(p.functions.len() - 1));
             } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "pred" && self.at("fn", 1) {
                 self.bump();
-                let mut f = self.function(None, is_pub)?;
+                let mut f = self.function(None)?;
                 f.pred = true;
                 self.fn_pub.push(is_pub);
                 p.functions.push(f);
@@ -1739,7 +1739,7 @@ impl Parser {
                 let t = self.peek(0).clone();
                 return Err(self.foreign_syntax(&t, "missing `trusted`", "write `trusted rust fn ...`"));
             } else {
-                let mut f = self.function(None, is_pub)?;
+                let mut f = self.function(None)?;
                 f.attribute = attribute;
                 self.fn_pub.push(is_pub);
                 p.functions.push(f);
@@ -2593,7 +2593,7 @@ impl Parser {
     }
 
     /// foreign: the `trusted` token of a `trusted rust fn` declaration (its `rust` was consumed), else None.
-    fn function(&mut self, foreign: Option<Tok>, is_pub: bool) -> R<Function> {
+    fn function(&mut self, foreign: Option<Tok>) -> R<Function> {
         let mut kw = self.expect_tok("fn")?;
         if let Some(t) = &foreign {
             kw = t.clone();
@@ -2698,13 +2698,13 @@ impl Parser {
         self.expect("->")?;
         self.fixed_ok = true; // P7-1 B: a fixed-length array result is returned by value
         let (ret, ret_refine) = self.type_r(true)?;
-        if is_pub || foreign.is_some() {
+        if foreign.is_some() {
             let signature = || std::iter::once(&ret).chain(params.iter().map(|p| &p.ty));
             if signature().any(|ty| matches!(ty.as_str(), "array_u16" | "@ref<array_u16>")) {
-                return Err(self.small_int_unsupported(&kw, "[u16] at the host boundary is bundle P12"));
+                return Err(self.small_int_unsupported(&kw, "[u16] in foreign signatures requires P12"));
             }
             if signature().any(|ty| intwidth::is_narrow(ty)) {
-                return Err(self.small_int_unsupported(&kw, "non-i64 integers in public or foreign signatures require P12"));
+                return Err(self.small_int_unsupported(&kw, "non-i64 integers in foreign signatures require P12"));
             }
         }
         if kw.val == "extern" {

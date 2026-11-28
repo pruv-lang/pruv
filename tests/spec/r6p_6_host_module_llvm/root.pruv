@@ -1,0 +1,8 @@
+// spec: R-6p-6 accept
+// P12a: on LLVM a child-module `pub` function with a narrow integer is internal, not a host boundary
+mod keys;
+pub fn r(x: i64) -> i64
+  requires x >= 0 && x < 100
+{
+  return i64(crate::keys::w(u16(x)));
+}

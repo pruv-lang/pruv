@@ -1,0 +1,7 @@
+// spec: R-6p-6 reject
+// P12a: the LLVM host boundary keeps rejecting [u16] and non-i64 integers (later P12 bundle)
+pub fn first_unit(sid: [u16]) -> u16
+  requires len(sid) > 0
+{
+  return u16(sid[0]);
+}

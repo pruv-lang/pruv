@@ -1,0 +1,7 @@
+// spec: R-6p-6 accept
+// P12a: a requires over narrow parameters is checked at the Rust host entry
+pub fn pick(sid: [u16], k: u8) -> u16
+  requires i64(k) < len(sid)
+{
+  return u16(sid[k]);
+}

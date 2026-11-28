@@ -1,0 +1,10 @@
+// spec: R-6p-6 accept
+// P12a: take and inout [u16] parameters at a Rust host entry follow the [i64] rules
+pub fn count(take s: [u16]) -> i64 {
+  return len(s);
+}
+pub fn clear(inout s: [u16]) -> ()
+  requires len(s) > 0
+{
+  s[0] = 0;
+}

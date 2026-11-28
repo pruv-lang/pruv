@@ -1,1 +1,1 @@
-{"stage": "parse", "code": "small_int_unsupported"}
+{"stage": "codegen", "code": "small_int_unsupported", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "/tmp/pruv_p1_pub_sig_bindings.rs"]}

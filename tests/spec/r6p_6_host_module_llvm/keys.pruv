@@ -1,0 +1,3 @@
+pub fn w(x: u16) -> u16 {
+  return x;
+}

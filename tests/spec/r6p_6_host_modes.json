@@ -1,0 +1,1 @@
+{"gen_contains": ["pub fn count(s: ::std::vec::Vec<u16>) -> i64", "pub fn clear(s: &mut [u16])"]}
