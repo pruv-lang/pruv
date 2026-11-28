@@ -422,6 +422,7 @@ fn child(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64, ke
   // L-gaps 27: the child count is proved here only (record and open_container carry no count ensures).
   assert forall j in m0 + 1..m: tape[6 * j + 4] != id;
   assert count(k in m0 + 1..m: tape[6 * k + 4] == id) == 0;
+  assert forall j in id + 1..m0: tape[6 * j + 4] == old(tape)[6 * j + 4];
   assert count(k in id + 1..m0: tape[6 * k + 4] == id) == count(k in id + 1..m0: old(tape)[6 * k + 4] == id);
   assert count(k in id + 1..m0 + 1: tape[6 * k + 4] == id) == count(k in id + 1..m0: tape[6 * k + 4] == id) + count(k in m0..m0 + 1: tape[6 * k + 4] == id);
   assert count(k in id + 1..m: tape[6 * k + 4] == id) == count(k in id + 1..m0 + 1: tape[6 * k + 4] == id) + count(k in m0 + 1..m: tape[6 * k + 4] == id);
