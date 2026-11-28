@@ -12,7 +12,9 @@ pub fn parse_line(data: [u8], start: i64, end: i64) -> Line from(data) ! alloc
   requires 0 <= start && start <= end && end <= len(data)
   ensures is_variant(result, Line::Object) ==> crate::json::doc_local(variant_field(result, Line::Object, doc))
   ensures is_variant(result, Line::Object) ==> crate::json::doc_strings(variant_field(result, Line::Object, doc))
+  ensures (end - start == 2 && data[start] == 123 && data[start + 1] == 125) ==> is_variant(result, Line::Object)
 {
+  // HC-7: the acceptance ensures says the empty object line `{}` is an Object (pkgs/parse proves it is Parsed).
   // DB39: parse::parse over a borrowed view (R-6g-5). The scan reads data[start..end) in place and
   // validates UTF-8 inside string tokens (D33); the record-local tape facts are scan_document ensures
   // (DB33), so only check_subtrees runs after the scan. 4.4zh-DB: an accepted line's document borrows data[start..end).

@@ -91,11 +91,12 @@ MUTANTS = [
   'let k: i64 = c.begun % 200;\n  match vec_at_mut::<Draft>(inout c.drafts, k) {\n    Some(d) => {\n      if d.tools'),
  (18, 'turns.pruv', 'stop updating completedAt once the reply budget is full',
   '  if !c.active { return; }\n  let k: i64 = (c.begun - 1) % 200;\n  let m: i64 = len(at);',
-  '  if !c.active || vec_get::<Draft>(c.drafts, (c.begun - 1) % 200).used >= 32768 { return; }\n  let k: i64 = (c.begun - 1) % 200;\n  let m: i64 = len(at);'),
+  '  if !c.active || vec_get::<Draft>(c.drafts, (c.begun - 1) % 200).used >= 32768 { return; }\n  let k: i64 = (c.begun - 1) % 200;\n  let m: i64 = len(at);'), (19, 'entry.pruv', 'parse_line always returns Skip (an accepted line is dropped)',
+  'return Line::Object(document);', 'return Line::Skip;'),
 ]
 
 # Notes only; the real outcome is always measured.
-EXPECTED = {4: 'proof-rejected', 7: 'proof-rejected', 8: 'proof-rejected', 9: 'proof-rejected', 11: 'proof-rejected',
+EXPECTED = {4: 'proof-rejected', 19: 'proof-rejected', 7: 'proof-rejected', 8: 'proof-rejected', 9: 'proof-rejected', 11: 'proof-rejected',
             13: 'proof-rejected', 15: 'proof-rejected', 16: 'proof-rejected', 17: 'proof-rejected'}
 # A mutant that is genuinely equivalent would be listed here as id -> one-line argument (none is assumed).
 EQUIVALENT = {}

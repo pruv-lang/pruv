@@ -11,6 +11,7 @@ pub fn validate_utf8(input: [u8], start: i64, end: i64) -> i64
   requires 0 <= start && start <= end && end <= len(input)
   ensures result == -1 || (start <= result && result < end)
   ensures result == -1 ==> utf8_valid_span(input, start, end)
+  ensures (end - start == 2 && input[start] < 128 && input[start + 1] < 128) ==> result == -1
 {
   // 4.4zc (4.4l-VU): the shape of std `run_utf8_validation`: one loop; an ASCII byte at an 8-aligned offset starts
   // the skip of all-ASCII 16-byte blocks (two word loads and a mask test) and then
@@ -75,9 +76,11 @@ fn ascii_block(input: [u8], i: i64) -> bool
 pub fn skip_whitespace(input: [u8], inout pos: i64, end: i64) -> ()
   requires 0 <= pos && pos <= end && end <= len(input)
   ensures old(pos) <= pos && pos <= end
+  ensures (old(pos) < end && input[old(pos)] != 32 && input[old(pos)] != 9 && input[old(pos)] != 10 && input[old(pos)] != 13) ==> pos == old(pos)
 {
   while pos < end
     invariant old(pos) <= pos && pos <= end
+    invariant (old(pos) < end && input[old(pos)] != 32 && input[old(pos)] != 9 && input[old(pos)] != 10 && input[old(pos)] != 13) ==> pos == old(pos)
     decreases end - pos
   {
     let c: i64 = input[pos];

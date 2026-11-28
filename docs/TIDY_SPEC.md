@@ -395,6 +395,14 @@ by byte-identical output and run by group, with the full test suite once before 
       Not done (P11-db): `pkgs/parse::parse` / `scan` have no acceptance `ensures` (every one is `Parsed ==> ..` or a
       failure position), so no input is proved to parse and an always-`Skip` body still meets any success condition
       on `parse_line`. Needs an acceptance fact in `pkgs/parse` (at least for an object line) first.
+      Done (HC-11): `pkgs/parse` `parse`, `scan_document`, `scan`, `scan_records`, `record`, `open_container` and
+      `container` ensure the empty object `{}` is accepted (`Parsed` / `Tape` / ok), on the lex facts that two ASCII
+      bytes are valid UTF-8 and that `skip_whitespace` does not move past a non-space byte; all are quantifier-free
+      (a `forall` acceptance ensures on `validate_utf8` made `lines::parse_range` time out). `parse_line` ensures a
+      `{}` line is `Line::Object`; q_mutants mutant 19 (always `Skip`) is proof-rejected at that ensures. Proof time
+      of claude `q_root` unchanged (about 21 s) and the generated Rust is identical. Gap left: a general plain user
+      line (`{"type":"user",...}`) is not yet proved Object; that needs acceptance facts for strings, keys and
+      member loops in `pkgs/parse`.
     - HC-8 `.github/workflows/windows-abi.yml:7` path filter omits the compiler, so committed `.win.ll` can go
       stale; run `tests/abi/winci/prepare.py --check` when ABI codegen changes. Done: the filter adds
       `pruvc-rs/crates/pruv-core/src/**` and `pruvc-rs/crates/pruvc/src/**`; `ci.yml` runs `prepare.py --check
@@ -413,6 +421,10 @@ by byte-identical output and run by group, with the full test suite once before 
       pairs disagree with the oracle on 2855 cases (shortest: input `""`, tape word 6 is 1, oracle 0), and the two
       py pairs fail with `KeyError 'py'` since the Python compiler was frozen. Find whether the oracle or the lane is
       wrong, fix it, and drop or mark the py pairs. Not in run_all or CI, so nothing else catches it.
+      Done: the oracle was stale. Since 4.4n (b594b7c8, merge eee0fa63, 4.4m-PB) `parse::parse` sets tape word 5 to
+      the plain bit (1 = no backslash) on kind 4/7 records, as `json::check_tape` allows; `run_q.py` still expected 0.
+      The oracle now expects the plain bit for strings and keys, and the py pairs run only with `--vs-py`
+      (`run_a3.COMPILER_SET`). rs/rust and rs/llvm: 20213 cases, 0 mismatches; rc 0.
     Recorded, not queued yet: LLVM `par` per-thread 64 KiB block cache not returned at thread exit
     (`pruvc/runtime.c:208`, `parallel_shim.rs:34`), measure under repeated `par` before a row; trusted
     declarations 7 -> 42 in 14 days (26 in budget), counted at every broad check; uncalled
