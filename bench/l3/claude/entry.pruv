@@ -168,7 +168,7 @@ fn block_of(doc: crate::json::JsonDocument, j: i64) -> Block ! alloc
 
 // hand is_human_text: one trim; empty and the interrupt lines are not human text; the origin is read only when
 // both task tags match. 1 human, 0 not, negative on a corrupt tape.
-fn is_human_text(doc: crate::json::JsonDocument, origin: i64, text: str) -> i64 ! alloc
+pub fn is_human_text(doc: crate::json::JsonDocument, origin: i64, text: str) -> i64 ! alloc
 {
   let b: crate::text::Span = crate::text::trim_span(text);
   if b.lo == b.hi { return 0; }
@@ -180,7 +180,7 @@ fn is_human_text(doc: crate::json::JsonDocument, origin: i64, text: str) -> i64 
 }
 
 // String content: untrimmed text unless blank or an engine line.
-fn string_content(doc: crate::json::JsonDocument, origin: i64, c: i64) -> Field ! alloc
+pub fn string_content(doc: crate::json::JsonDocument, origin: i64, c: i64) -> Field ! alloc
 {
   let t: crate::jstr::Text = crate::access::string_text_owned(doc, c);
   match t {
@@ -259,6 +259,24 @@ pub fn human_text_of(doc: crate::json::JsonDocument, k: [i64; 13]) -> Field ! al
   if user < 0 { return Field::Defect(user); }
   if user == 0 { return Field::Missing; }
   return user_text(doc, k);
+}
+
+// The same checks as user_text up to the content node: its id when the content is a string node (kind 4), otherwise
+// -1 (not a string, missing, or a defect: the caller then runs user_text, which reports exactly that).
+pub fn user_string_node(doc: crate::json::JsonDocument, k: [i64; 13]) -> i64 ! alloc
+  ensures result >= 0 ==> result < len(doc.tape) / 6
+{
+  let meta: i64 = true_of(doc, k[4]);
+  if meta != 0 { return -1; }
+  let side: i64 = true_of(doc, k[2]);
+  if side != 0 { return -1; }
+  let msg: i64 = object_of(doc, k[3]);
+  if msg < 0 { return -1; }
+  let c: i64 = crate::access::field(doc, msg, "content");
+  if c < 0 { return -1; }
+  let kc: i64 = crate::access::kind(doc, c);
+  if kc != 4 { return -1; }
+  return c;
 }
 
 // The caller has already classified the entry as a user message.

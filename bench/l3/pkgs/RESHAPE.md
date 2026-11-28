@@ -1629,3 +1629,12 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   status separately and building a local view in each caller would work around the gap rather than close it, so it
   is not done. Needed: a borrowing enum payload (an enum that is itself `ref` when a payload is), or a borrowed
   document form in `pkgs/json`.
+  - Within the language, the user prompt no longer takes an owned copy. `claude/entry.pruv` `user_string_node` runs
+    `user_text`'s checks and returns the string node. `claude/import.pruv` `human_string` then borrows the plain string
+    with `access::plain_str` (`Option<ref str>`), as `answer_string` already does for replies. Escaped strings keep the
+    owned decode. Results and defect order are unchanged (claude a0-a4 pass).
+  - Re-measured under the perf lock at load 2.1 (local `work/lgaps29/perf_cells_r3.json`): long_text window
+    1.028 -> 1.000 / 0.697 (rs/rust / rs/llvm). That meets the at-or-below-hand limit for the cell. The only time cells
+    above 1.0 are window_8MiB tail rs/llvm (1.024) and turns0 window rs/rust (1.976), both at the one-tick timer floor
+    (41-83 µs).
+  - The source copy of the line (the document's own `[u8]`) is still the open part of this row.
