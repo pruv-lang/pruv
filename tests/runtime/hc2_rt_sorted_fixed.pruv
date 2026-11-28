@@ -1,0 +1,21 @@
+// HC-2: a sortedness requires over a fixed array checks the constant length N and the element width at run time
+// (LLVM used the missing length field). [1, 2] passes; [3, 1] stops with the requires message.
+
+fn first(a: [i64; 2]) -> i64
+  requires forall i in 0..len(a): forall j in i..len(a): a[i] <= a[j]
+{
+  return a[0];
+}
+
+fn small(b: [u8; 3]) -> i64
+  requires forall i in 0..len(b): forall j in i..len(b): b[i] <= b[j]
+{
+  return len(b);
+}
+
+fn run() -> () ! io {
+  let b: [u8; 3] = [1, 2, 200];
+  print(small(b));
+  print(first([1, 2]));
+  print(first([3, 1]));
+}

@@ -8534,6 +8534,9 @@ impl<'a> FnGen<'a> {
     /// The O(n) form of the sorted precondition forall: forall k in 1..len(a): a[k-1] <= a[k]
     pub fn csorted(&mut self, name: &str, q: usize) -> R<V> {
         let arr = self.cenv.get(name).cloned().ok_or_else(|| format!("'{}'", name))?;
+        // P7-1: a fixed array is its address; its length is the constant N and it has no length field
+        let fixed = arr.ty.as_deref().and_then(fixed_key).and_then(|f| f.fixed_parts().map(|(el, n)| (el.clone(), n)));
+        let bound = match &fixed { Some((_, n)) => n.to_string(), None => arr.b.clone() };
         let k = format!("%q{}.k", q);
         let r = format!("%q{}.r", q);
         self.allocas.push(format!("{} = alloca i64", k));
@@ -8547,13 +8550,24 @@ impl<'a> FnGen<'a> {
         self.br(&cl)?;
         self.place(&cl);
         let kv = self.op(format!("load i64, ptr {}", k))?;
-        let c = self.op(format!("icmp slt i64 {}, {}", kv, arr.b))?;
+        let c = self.op(format!("icmp slt i64 {}, {}", kv, bound))?;
         self.condbr(&c, &bl, &el)?;
         self.place(&bl);
         self.spend()?;
         let pk = self.op(format!("sub i64 {}, 1", kv))?;
         let le;
-        if buffer_layout(&arr) != "i64" {
+        if let Some((fe, _)) = &fixed {
+            let w = crate::intwidth::of(&fe.name).ok_or_else(|| format!("llvmgen: sorted requires over a fixed array of {}", fe.name))?;
+            let ir = fixed_elem_ir(fe);
+            let ext = if w.signed { "sext" } else { "zext" };
+            let g0 = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", ir, arr.a, pk))?;
+            let g1 = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", ir, arr.a, kv))?;
+            let x0 = self.op(format!("load {}, ptr {}", ir, g0))?;
+            let x1 = self.op(format!("load {}, ptr {}", ir, g1))?;
+            let z0 = self.op(format!("{} {} {} to i128", ext, ir, x0))?;
+            let z1 = self.op(format!("{} {} {} to i128", ext, ir, x1))?;
+            le = self.op(format!("icmp sle i128 {}, {}", z0, z1))?;
+        } else if buffer_layout(&arr) != "i64" {
             let g0 = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", elem_ir(&arr), arr.a, pk))?;
             let z0 = self.narrow_load(&arr, &g0, "i64")?;
             let g1 = self.op(format!("getelementptr inbounds {}, ptr {}, i64 {}", elem_ir(&arr), arr.a, kv))?;

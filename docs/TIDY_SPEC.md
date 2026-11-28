@@ -371,7 +371,9 @@ by byte-identical output and run by group, with the full test suite once before 
       listener slot allows `ev_error(result) == 2` (other kinds keep `ok`), G10_ASYNC_SPEC §3/`ev_remove` row say so,
       and `tests/must_reject/g10a_v_remove_listener_ok.pruv` (listener) rejects `ensures ev_ok(result)`.
     - HC-2 wrong LLVM IR: a fixed array `[i64; 2]` with the sortedness `requires` (SPEC 3177/3770) emits
-      `icmp slt i64 %t1, None` in safe mode (`pruv-core/src/llvmgen.rs:1538,7591,8550`).
+      `icmp slt i64 %t1, None` in safe mode (`pruv-core/src/llvmgen.rs:1538,7591,8550`). Done: (P11-zi) the
+      runtime sorted check of a fixed array uses its static length and element type (sign- or zero-extended to
+      i128); `tests/runtime/hc2_rt_sorted_fixed` (`[i64; 2]`, `[u8; 3]`, both backends) accepts and rejects.
     - HC-3 Rust name capture: a parameter named like a called function (`bump: i64` and `bump()`) emits
       `return bump();` on the parameter (`pruv-core/src/codegen.rs:6594`). Needs a rustc-built twin.
     - HC-4 R-7-3 mismatch (also 4.4zh-IP, in P11-zh): explicit `#[inline]` cuts the recursion graph and
