@@ -5061,6 +5061,13 @@ impl<'a> FnVerifier<'a> {
             if n != "ev_accept" { self.assume(st,g,ok.implies(&a.ne_i(-1))); }
             if n == "ev_add_timer" { self.assume(st,g,ok); }
         }
+        else if n == "ev_remove" {
+            // G10 §5.6: removing a listener whose wake-up connect fails records loop error 2 (pruv_ev_end)
+            let listener = p.kind.select(args[1].try_ast()?).raw_eq(&z.int(2));
+            self.assume(st, g, listener.not().implies(&r.error.raw_eq(&z.int(0))));
+            self.assume(st, g, listener.implies(&z.or(&[r.error.raw_eq(&z.int(0)), r.error.raw_eq(&z.int(2))])));
+            self.assume(st, g, (r.last.clone()).raw_eq(&z.int(-1)));
+        }
         else {
             self.assume(st, g, (r.error.clone()).raw_eq(&z.int(0)));
             self.assume(st, g, (r.last.clone()).raw_eq(&z.int(-1)));

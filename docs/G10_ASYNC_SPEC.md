@@ -141,7 +141,8 @@ Shorthand used in the table:
   it may change.
 - **N** = `last(result) == -1`.
 - **O** = `ok(result)`. Only the add operations that start a thread (`ev_add_socket`, `ev_add_listener`,
-  `ev_add_process`) and `ev_accept` can produce `!ok(result)`; every other operation preserves `ok`.
+  `ev_add_process`), `ev_accept` and `ev_remove` of a listener slot (§5.6) can produce `!ok(result)`; every other
+  operation preserves `ok`.
 - **new slot s** (for an add or an accept that produced a slot) = `0 <= s && s < cap(result)`, `kind(l,s) == 0`
   (it was free at entry), `s == last(result)`, `cnt(result) == cnt(l) + 1`, and F({s}).
 
@@ -290,7 +291,7 @@ Reaping failure is code 8: the slot is freed anyway, `ev_exit(result) == 0`, and
 
 | Operation | Effect | Contract / meaning |
 |---|---|---|
-| `ev_remove(take l: Loop, slot: i64) -> Loop` | `async, net, proc, alloc` | requires P, slot ok, `kind(l,slot) != 0`. Cancellation: ends the slot's resource (socket close; listener close; process kill and wait; timer drop), joins the slot's threads, frees the slot. Ensures O, B, N, `kind(result,slot) == 0`, `!eof(result,slot)`, `!open(result,slot)`, `cnt(result) == cnt(l) - 1`, F({slot}) |
+| `ev_remove(take l: Loop, slot: i64) -> Loop` | `async, net, proc, alloc` | requires P, slot ok, `kind(l,slot) != 0`. Cancellation: ends the slot's resource (socket close; listener close; process kill and wait; timer drop), joins the slot's threads, frees the slot. Ensures, when `kind(l,slot) != 2`, O; for a listener slot `ok(result) || ev_error(result) == 2` (the wake-up connect of §5.6 failed). Ensures B when `ok(result)`, N, `kind(result,slot) == 0`, `!eof(result,slot)`, `!open(result,slot)`, `cnt(result) == cnt(l) - 1`, F({slot}) |
 
 A removed slot's queued data is discarded. Removing the slot named by the last event leaves the event values as
 they are (B): they are a report of the last wait, not a live view. Removing a process slot that is still
