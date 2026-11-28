@@ -313,6 +313,7 @@ fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i6
   ensures is_ok(result) ==> contained(tape, len(old(tape)) / 6 + 1, len(tape) / 6, len(old(tape)) / 6)
   ensures is_ok(result) ==> tree_ok(tape, len(old(tape)) / 6, len(tape) / 6)
   ensures is_ok(result) ==> starts_from(tape, len(old(tape)) / 6, len(tape) / 6, old(pos))
+  ensures (!key && depth < 128 && len(old(tape)) < 6291456 && old(pos) + 2 == len(input) && input[old(pos)] == 123 && input[old(pos) + 1] == 125) ==> (is_ok(result) && pos == len(input))
   decreases 5 * (129 - depth) + 2
 {
   let end: i64 = len(input);
@@ -378,6 +379,7 @@ fn open_container(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, d
   ensures is_ok(result) ==> contained(tape, len(old(tape)) / 6 + 1, len(tape) / 6, len(old(tape)) / 6)
   ensures is_ok(result) ==> tree_ok(tape, len(old(tape)) / 6, len(tape) / 6)
   ensures is_ok(result) ==> starts_from(tape, len(old(tape)) / 6, len(tape) / 6, old(pos))
+  ensures (kind == 6 && depth < 128 && len(old(tape)) < 6291456 && old(pos) + 2 == len(input) && input[old(pos) + 1] == 125) ==> (is_ok(result) && pos == len(input))
   decreases 5 * (129 - depth) + 1
 {
   let start: i64 = pos;
@@ -520,6 +522,7 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
   ensures is_ok(result) ==> tree_ok(tape, id + 1, len(tape) / 6)
   ensures is_ok(result) ==> starts_from(tape, id + 1, len(tape) / 6, old(pos))
   ensures is_ok(result) ==> (!object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> tape[6 * j] != 7)))
+  ensures (object && old(pos) + 1 == len(input) && input[old(pos)] == 125) ==> (is_ok(result) && pos == len(input))
   decreases 5 * (129 - depth) + 5
 {
   let from: i64 = pos;
@@ -578,6 +581,7 @@ fn scan_records(input: [u8], inout tape: [i64], object: bool) -> Result<(), crat
   ensures is_ok(result) ==> contained(tape, 1, len(tape) / 6, 0)
   ensures is_ok(result) ==> tree_ok(tape, 0, len(tape) / 6)
   ensures (is_ok(result) && object) ==> tape[0] == 6
+  ensures (len(input) == 2 && input[0] == 123 && input[1] == 125) ==> is_ok(result)
 {
   arr_reserve(inout tape, 192);
   let n: i64 = len(input);
@@ -612,6 +616,7 @@ pub fn scan(input: [u8]) -> Checked ! alloc
   ensures is_variant(result, Checked::Tape) ==> (forall t in 0..len(variant_field(result, Checked::Tape, tape)) / 6: ((variant_field(result, Checked::Tape, tape)[6 * t] <= 4 || variant_field(result, Checked::Tape, tape)[6 * t] == 7) ==> (variant_field(result, Checked::Tape, tape)[6 * t + 5] == 0 || (variant_field(result, Checked::Tape, tape)[6 * t + 5] == 1 && (variant_field(result, Checked::Tape, tape)[6 * t] == 4 || variant_field(result, Checked::Tape, tape)[6 * t] == 7)))))
   ensures is_variant(result, Checked::Tape) ==> contained(variant_field(result, Checked::Tape, tape), 1, len(variant_field(result, Checked::Tape, tape)) / 6, 0)
   ensures is_variant(result, Checked::Tape) ==> tree_ok(variant_field(result, Checked::Tape, tape), 0, len(variant_field(result, Checked::Tape, tape)) / 6)
+  ensures (len(input) == 2 && input[0] == 123 && input[1] == 125) ==> is_variant(result, Checked::Tape)
 {
   let mut tape: [i64] = alloc(0, 0);
   let root: Result<(), crate::lex::Fault> = scan_records(input, inout tape, false);
@@ -647,6 +652,7 @@ fn scan_document(input: [u8], object: bool) -> crate::json::JsonParse from(input
   ensures (is_variant(result, crate::json::JsonParse::Parsed) && object) ==> variant_field(result, crate::json::JsonParse::Parsed, document).tape[0] == 6
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> contained(variant_field(result, crate::json::JsonParse::Parsed, document).tape, 1, len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6, 0)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> tree_ok(variant_field(result, crate::json::JsonParse::Parsed, document).tape, 0, len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6)
+  ensures (len(input) == 2 && input[0] == 123 && input[1] == 125) ==> is_variant(result, crate::json::JsonParse::Parsed)
 {
   let mut tape: [i64] = alloc(0, 0);
   let root: Result<(), crate::lex::Fault> = scan_records(input, inout tape, object);
@@ -705,6 +711,8 @@ pub fn parse(input: [u8], object: bool) -> crate::json::JsonParse from(input) ! 
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: (forall j in t + 1..variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 3]: (j < len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6 && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * j + 1] >= variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 1] && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * j + 2] <= variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 2] && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * j + 3] <= variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 3] && variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * j + 4] >= t)))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (forall t in 0..len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6: (variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t] == 5 ==> (forall j in t + 1..variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * t + 3]: (j < len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) / 6 && (variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * j + 4] == t ==> variant_field(result, crate::json::JsonParse::Parsed, document).tape[6 * j] != 7)))))
   ensures (is_variant(result, crate::json::JsonParse::Parsed) && object) ==> variant_field(result, crate::json::JsonParse::Parsed, document).tape[0] == 6
+  // HC-7: an acceptance fact; the empty object line `{}` is Parsed under either root mode.
+  ensures (len(input) == 2 && input[0] == 123 && input[1] == 125) ==> is_variant(result, crate::json::JsonParse::Parsed)
 {
   let n: i64 = len(input);
   if n > 16777216 { return failure(0, 1); }

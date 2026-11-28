@@ -395,6 +395,14 @@ by byte-identical output and run by group, with the full test suite once before 
       Not done (P11-db): `pkgs/parse::parse` / `scan` have no acceptance `ensures` (every one is `Parsed ==> ..` or a
       failure position), so no input is proved to parse and an always-`Skip` body still meets any success condition
       on `parse_line`. Needs an acceptance fact in `pkgs/parse` (at least for an object line) first.
+      Done (HC-11): `pkgs/parse` `parse`, `scan_document`, `scan`, `scan_records`, `record`, `open_container` and
+      `container` ensure the empty object `{}` is accepted (`Parsed` / `Tape` / ok), on the lex facts that two ASCII
+      bytes are valid UTF-8 and that `skip_whitespace` does not move past a non-space byte; all are quantifier-free
+      (a `forall` acceptance ensures on `validate_utf8` made `lines::parse_range` time out). `parse_line` ensures a
+      `{}` line is `Line::Object`; q_mutants mutant 19 (always `Skip`) is proof-rejected at that ensures. Proof time
+      of claude `q_root` unchanged (about 21 s) and the generated Rust is identical. Gap left: a general plain user
+      line (`{"type":"user",...}`) is not yet proved Object; that needs acceptance facts for strings, keys and
+      member loops in `pkgs/parse`.
     - HC-8 `.github/workflows/windows-abi.yml:7` path filter omits the compiler, so committed `.win.ll` can go
       stale; run `tests/abi/winci/prepare.py --check` when ABI codegen changes. Done: the filter adds
       `pruvc-rs/crates/pruv-core/src/**` and `pruvc-rs/crates/pruvc/src/**`; `ci.yml` runs `prepare.py --check
