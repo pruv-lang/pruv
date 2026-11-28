@@ -149,7 +149,7 @@ c2:
   ret i128 %rr
 }
 
-define internal { i1, i64 } @mix__pruv_body(i64 %p.a, { i1, i64 } %p.o, i64 %p.b, i64 %p.c, i64 %p.d) {
+define internal { i1, i64 } @mix__pruv_body(i64 %p.a, { i1, i64 } %p.o, i64 %p.b, i64 %p.c, i64 %p.d) alwaysinline {
 entry:
   br label %start
 start:

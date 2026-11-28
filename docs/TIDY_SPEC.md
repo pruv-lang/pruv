@@ -384,7 +384,10 @@ by byte-identical output and run by group, with the full test suite once before 
     - HC-7 `bench/l3/claude/entry.pruv:10` `parse_line` contract holds for an always-`Skip` body; add the
       success condition for a plain user line and a mutant in `q_mutants.py` that must be rejected by it.
     - HC-8 `.github/workflows/windows-abi.yml:7` path filter omits the compiler, so committed `.win.ll` can go
-      stale; run `tests/abi/winci/prepare.py --check` when ABI codegen changes.
+      stale; run `tests/abi/winci/prepare.py --check` when ABI codegen changes. Done: the filter adds
+      `pruvc-rs/crates/pruv-core/src/**` and `pruvc-rs/crates/pruvc/src/**`; `ci.yml` runs `prepare.py --check
+      --skip-run` on macOS/Linux. The check found all 25 committed `.win.ll` stale (`alwaysinline`, array length
+      guards); `out/` regenerated (`.rs` and `.expected` unchanged). Windows run of the new `.win.ll`: next main push.
     - HC-9 `tests/spec_trace.py:57` does not fail on SPEC sections without any rule ID (10 of 42); add IDs or
       an explicit exemption list for the example section. Done: a section without a rule ID now fails unless it is in
       `EXEMPT_SECTIONS` (the 10 sections of a206043a, closed list; SPEC.md unchanged); a stale entry prints a note.

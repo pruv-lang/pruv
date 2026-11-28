@@ -83,7 +83,7 @@ done:
   ret void
 }
 
-define internal { i1, i1 } @opt_bool__pruv_body({ i1, i1 } %p.x) {
+define internal { i1, i1 } @opt_bool__pruv_body({ i1, i1 } %p.x) alwaysinline {
 entry:
   br label %start
 start:
@@ -122,7 +122,7 @@ entry:
   ret void
 }
 
-define internal { i1, i1 } @some_bool__pruv_body(i1 %p.b) {
+define internal { i1, i1 } @some_bool__pruv_body(i1 %p.b) alwaysinline {
 entry:
   br label %start
 start:
@@ -155,7 +155,7 @@ entry:
   ret void
 }
 
-define internal { i1, i1 } @none_bool__pruv_body() {
+define internal { i1, i1 } @none_bool__pruv_body() alwaysinline {
 entry:
   br label %start
 start:
@@ -185,7 +185,7 @@ entry:
   ret void
 }
 
-define internal i1 @flag__pruv_body({ i1, i1 } %p.o) {
+define internal i1 @flag__pruv_body({ i1, i1 } %p.o) alwaysinline {
 entry:
   br label %start
 start:
@@ -222,7 +222,7 @@ entry:
   ret i64 %rz
 }
 
-define internal { i1, %pruv_t_Point } @opt_point__pruv_body({ i1, %pruv_t_Point } %p.o) {
+define internal { i1, %pruv_t_Point } @opt_point__pruv_body({ i1, %pruv_t_Point } %p.o) alwaysinline {
 entry:
   br label %start
 start:
@@ -269,7 +269,7 @@ entry:
   ret void
 }
 
-define internal { i1, { i1, i64 } } @opt_res__pruv_body({ i1, { i1, i64 } } %p.o) {
+define internal { i1, { i1, i64 } } @opt_res__pruv_body({ i1, { i1, i64 } } %p.o) alwaysinline {
 entry:
   br label %start
 start:

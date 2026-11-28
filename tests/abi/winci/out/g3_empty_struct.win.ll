@@ -85,7 +85,7 @@ done:
   ret void
 }
 
-define internal %pruv_t_Marker @marker_id__pruv_body(%pruv_t_Marker %p.m) {
+define internal %pruv_t_Marker @marker_id__pruv_body(%pruv_t_Marker %p.m) alwaysinline {
 entry:
   br label %start
 start:
@@ -108,7 +108,7 @@ entry:
   ret void
 }
 
-define internal %pruv_t_pruv_g3_t_6_Holder_1_n6_Marker_0 @hold_marker__pruv_body(%pruv_t_Marker %p.m) {
+define internal %pruv_t_pruv_g3_t_6_Holder_1_n6_Marker_0 @hold_marker__pruv_body(%pruv_t_Marker %p.m) alwaysinline {
 entry:
   br label %start
 start:
@@ -133,7 +133,7 @@ entry:
   ret void
 }
 
-define internal { i1, %pruv_t_Marker } @some_marker__pruv_body(%pruv_t_Marker %p.m) {
+define internal { i1, %pruv_t_Marker } @some_marker__pruv_body(%pruv_t_Marker %p.m) alwaysinline {
 entry:
   br label %start
 start:
@@ -163,7 +163,7 @@ entry:
   ret void
 }
 
-define internal { i1, %pruv_t_Marker } @no_marker__pruv_body() {
+define internal { i1, %pruv_t_Marker } @no_marker__pruv_body() alwaysinline {
 entry:
   br label %start
 start:

@@ -7,6 +7,10 @@ on:
     paths:
       - "tests/abi/winci/**"
       - "pruvc/runtime.c"
+      # LLVM IR and binding generation (llvmgen.rs uses most of pruv-core) and the driver. The committed out/*.win.ll
+      # must match the compiler: ci.yml runs `tests/abi/winci/prepare.py --check --skip-run` on every push.
+      - "pruvc-rs/crates/pruv-core/src/**"
+      - "pruvc-rs/crates/pruvc/src/**"
       - ".github/workflows/windows-abi.yml"
 
 env:

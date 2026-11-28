@@ -80,7 +80,7 @@ done:
   ret void
 }
 
-define internal { i1, i64 } @echo_opt__pruv_body({ i1, i64 } %p.o) {
+define internal { i1, i64 } @echo_opt__pruv_body({ i1, i64 } %p.o) alwaysinline {
 entry:
   br label %start
 start:
@@ -121,7 +121,7 @@ entry:
   ret void
 }
 
-define internal { i1, i64 } @echo_res__pruv_body({ i1, i64 } %p.r) {
+define internal { i1, i64 } @echo_res__pruv_body({ i1, i64 } %p.r) alwaysinline {
 entry:
   br label %start
 start:

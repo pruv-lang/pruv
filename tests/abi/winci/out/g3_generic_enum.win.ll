@@ -90,7 +90,7 @@ done:
 }
 declare void @pruv_panic_repr(i64, ptr) noreturn cold nounwind
 
-define internal %pruv_t_pruv_g3_t_6_Choice_2_b_i @choice_id__pruv_body(%pruv_t_pruv_g3_t_6_Choice_2_b_i %p.c) {
+define internal %pruv_t_pruv_g3_t_6_Choice_2_b_i @choice_id__pruv_body(%pruv_t_pruv_g3_t_6_Choice_2_b_i %p.c) alwaysinline {
 entry:
   br label %start
 start:
@@ -145,7 +145,7 @@ enum.ok0:
   ret void
 }
 
-define internal %pruv_t_pruv_g3_t_6_Choice_2_ob_b @choice_flip__pruv_body(%pruv_t_pruv_g3_t_6_Choice_2_b_ob %p.c) {
+define internal %pruv_t_pruv_g3_t_6_Choice_2_ob_b @choice_flip__pruv_body(%pruv_t_pruv_g3_t_6_Choice_2_b_ob %p.c) alwaysinline {
 entry:
   br label %start
 start:

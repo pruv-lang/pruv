@@ -85,7 +85,7 @@ done:
   ret void
 }
 
-define internal %pruv_t_pruv_g3_t_4_Pair_2_b_i @pruv_g3_f_4_make_2_b_i__pruv_body(i1 %p.a, i64 %p.b) {
+define internal %pruv_t_pruv_g3_t_4_Pair_2_b_i @pruv_g3_f_4_make_2_b_i__pruv_body(i1 %p.a, i64 %p.b) alwaysinline {
 entry:
   br label %start
 start:
@@ -102,7 +102,7 @@ start:
   ret %pruv_t_pruv_g3_t_4_Pair_2_b_i %t1
 }
 
-define internal %pruv_t_pruv_g3_t_4_Pair_2_i_b @pruv_g3_f_4_make_2_i_b__pruv_body(i64 %p.a, i1 %p.b) {
+define internal %pruv_t_pruv_g3_t_4_Pair_2_i_b @pruv_g3_f_4_make_2_i_b__pruv_body(i64 %p.a, i1 %p.b) alwaysinline {
 entry:
   br label %start
 start:
@@ -119,7 +119,7 @@ start:
   ret %pruv_t_pruv_g3_t_4_Pair_2_i_b %t1
 }
 
-define internal %pruv_t_pruv_g3_t_4_Pair_2_b_i @pruv_g3_f_4_swap_2_i_b__pruv_body(%pruv_t_pruv_g3_t_4_Pair_2_i_b %p.p) {
+define internal %pruv_t_pruv_g3_t_4_Pair_2_b_i @pruv_g3_f_4_swap_2_i_b__pruv_body(%pruv_t_pruv_g3_t_4_Pair_2_i_b %p.p) alwaysinline {
 entry:
   br label %start
 start:
@@ -137,7 +137,7 @@ start:
   ret %pruv_t_pruv_g3_t_4_Pair_2_b_i %t1
 }
 
-define internal %pruv_t_pruv_g3_t_4_Pair_2_i_b @build__pruv_body(i64 %p.a, i1 %p.b) {
+define internal %pruv_t_pruv_g3_t_4_Pair_2_i_b @build__pruv_body(i64 %p.a, i1 %p.b) alwaysinline {
 entry:
   br label %start
 start:
@@ -167,7 +167,7 @@ entry:
   ret void
 }
 
-define internal %pruv_t_pruv_g3_t_4_Pair_2_b_i @swap_ib__pruv_body(%pruv_t_pruv_g3_t_4_Pair_2_i_b %p.p) {
+define internal %pruv_t_pruv_g3_t_4_Pair_2_b_i @swap_ib__pruv_body(%pruv_t_pruv_g3_t_4_Pair_2_i_b %p.p) alwaysinline {
 entry:
   br label %start
 start:

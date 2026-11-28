@@ -151,7 +151,7 @@ c2:
   ret i128 %rr
 }
 
-define internal i1 @left_bool__pruv_body(%pruv_t_pruv_g3_t_6_Choice_2_b_i %p.c) {
+define internal i1 @left_bool__pruv_body(%pruv_t_pruv_g3_t_6_Choice_2_b_i %p.c) alwaysinline {
 entry:
   br label %start
 start:
@@ -225,7 +225,7 @@ enum.ok0:
   ret i64 %rz
 }
 
-define internal i1 @is_left__pruv_body(%pruv_t_pruv_g3_t_6_Choice_2_b_i %p.c) {
+define internal i1 @is_left__pruv_body(%pruv_t_pruv_g3_t_6_Choice_2_b_i %p.c) alwaysinline {
 entry:
   br label %start
 start:
@@ -276,7 +276,7 @@ enum.ok0:
   ret i64 %rz
 }
 
-define internal i1 @opt_is_left__pruv_body({ i1, %pruv_t_pruv_g3_t_6_Choice_2_b_i } %p.o) {
+define internal i1 @opt_is_left__pruv_body({ i1, %pruv_t_pruv_g3_t_6_Choice_2_b_i } %p.o) alwaysinline {
 entry:
   br label %start
 start:

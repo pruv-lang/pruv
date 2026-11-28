@@ -149,7 +149,7 @@ c2:
   ret i128 %rr
 }
 
-define internal %pruv_t_Slot @make_slot__pruv_body(i64 %p.x) {
+define internal %pruv_t_Slot @make_slot__pruv_body(i64 %p.x) alwaysinline {
 entry:
   br label %start
 start:
@@ -210,7 +210,7 @@ entry:
   ret void
 }
 
-define internal { i1, i64 } @slot_opt__pruv_body(%pruv_t_Slot %p.s) {
+define internal { i1, i64 } @slot_opt__pruv_body(%pruv_t_Slot %p.s) alwaysinline {
 entry:
   br label %start
 start:

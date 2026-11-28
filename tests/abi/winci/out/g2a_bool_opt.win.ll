@@ -7,6 +7,7 @@ target triple = "x86_64-pc-windows-msvc"
 @.str.3 = private unnamed_addr constant [19 x i8] c"i128 overflow in %\00"
 @.str.4 = private unnamed_addr constant [10 x i8] c"count_opt\00"
 @.str.5 = private unnamed_addr constant [20 x i8] c"(len(a) <= 1000000)\00"
+@.str.6 = private unnamed_addr constant [13 x i8] c"array length\00"
 
 declare noalias nonnull ptr @pruv_raw_alloc_v3(i64, i64, i64) nounwind memory(inaccessiblemem: readwrite)
 declare noalias nonnull ptr @pruv_raw_alloc_zeroed_v3(i64, i64, i64) nounwind memory(inaccessiblemem: readwrite)
@@ -140,6 +141,7 @@ done:
   ret void
 }
 declare void @pruv_check_bool(ptr nocapture readonly, i64) nounwind
+declare void @pruv_panic_repr(i64, ptr) noreturn cold nounwind
 
 define internal i128 @pruv_cdiv(i128 %a, i128 %b) {
 entry:
@@ -201,7 +203,7 @@ c2:
   ret i128 %rr
 }
 
-define internal { i1, i64 } @count_opt__pruv_body(ptr noalias nocapture readonly %p.a.a, i64 %p.a.n) {
+define internal { i1, i64 } @count_opt__pruv_body(ptr noalias nocapture readonly %p.a.a, i64 %p.a.n) alwaysinline {
 entry:
   %l0.c.a = alloca i64
   %l1.i.a = alloca i64
@@ -264,6 +266,12 @@ ok.1:
 
 define void @pruv_abi_count_opt(ptr sret({ i64, i64 }) align 8 %sret, ptr %a.a.a, i64 %a.a.n) {
 entry:
+  %ln.p0 = icmp ugt i64 %a.a.n, 1099511627776
+  br i1 %ln.p0, label %len.bad.0, label %len.ok.0
+len.bad.0:
+  call void @pruv_panic_repr(i64 %a.a.n, ptr @.str.6)
+  unreachable
+len.ok.0:
   call void @pruv_check_bool(ptr %a.a.a, i64 %a.a.n)
   %r = call { i1, i64 } @count_opt__pruv_entry(ptr %a.a.a, i64 %a.a.n)
   %x0 = extractvalue { i1, i64 } %r, 0
@@ -278,6 +286,12 @@ entry:
 
 define void @pruv_abi_count_opt__typed(ptr sret({ i64, i64 }) align 8 %sret, ptr %a.a.a, i64 %a.a.n) {
 entry:
+  %ln.p0 = icmp ugt i64 %a.a.n, 1099511627776
+  br i1 %ln.p0, label %len.bad.0, label %len.ok.0
+len.bad.0:
+  call void @pruv_panic_repr(i64 %a.a.n, ptr @.str.6)
+  unreachable
+len.ok.0:
   %r = call { i1, i64 } @count_opt__pruv_entry(ptr %a.a.a, i64 %a.a.n)
   %x0 = extractvalue { i1, i64 } %r, 0
   %x1 = extractvalue { i1, i64 } %r, 1

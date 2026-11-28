@@ -146,7 +146,7 @@ c2:
   ret i128 %rr
 }
 
-define internal { i1, i64 } @get_opt__pruv_body(i64 %p.x) {
+define internal { i1, i64 } @get_opt__pruv_body(i64 %p.x) alwaysinline {
 entry:
   br label %start
 start:

@@ -150,20 +150,19 @@ c2:
   ret i128 %rr
 }
 
-define internal %pruv_t_Cell @bump__pruv_body(%pruv_t_Cell %p.c, i64 %p.d) {
+define internal %pruv_t_Cell @bump__pruv_body(%pruv_t_Cell %p.c, i64 %p.d) alwaysinline {
 entry:
   %l0.q.a = alloca %pruv_t_Cell
   br label %start
 start:
   store %pruv_t_Cell %p.c, ptr %l0.q.a
-  %t1 = load %pruv_t_Cell, ptr %l0.q.a
-  %t2 = extractvalue %pruv_t_Cell %t1, 1
+  %t1 = getelementptr inbounds %pruv_t_Cell, ptr %l0.q.a, i32 0, i32 1
+  %t2 = load i64, ptr %t1
   %t3 = add nsw i64 %t2, %p.d
-  %t4 = load %pruv_t_Cell, ptr %l0.q.a
-  %t5 = insertvalue %pruv_t_Cell %t4, i64 %t3, 1
-  store %pruv_t_Cell %t5, ptr %l0.q.a
-  %t6 = load %pruv_t_Cell, ptr %l0.q.a
-  ret %pruv_t_Cell %t6
+  %t4 = getelementptr inbounds %pruv_t_Cell, ptr %l0.q.a, i32 0, i32 1
+  store i64 %t3, ptr %t4
+  %t5 = load %pruv_t_Cell, ptr %l0.q.a
+  ret %pruv_t_Cell %t5
 }
 
 define internal %pruv_t_Cell @bump__pruv_entry(%pruv_t_Cell %p.c, i64 %p.d) {
