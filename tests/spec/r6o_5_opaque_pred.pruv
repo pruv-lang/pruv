@@ -1,0 +1,20 @@
+// spec: R-6o-5 accept
+// an opaque pred: its body quantifies and counts; callers carry it as a symbol, `reveal` opens it on one path
+pub opaque pred fn ones(a: [i64], n: i64) -> bool {
+  return 0 <= n && n <= len(a) && (forall i in 0..n: a[i] == 1) && count(k in 0..n: a[k] == 1) == n;
+}
+
+fn keep(a: [i64], n: i64) -> i64
+  requires ones(a, n)
+  ensures ones(a, n) && result == 0
+{ return 0; }
+
+pub fn first(a: [i64], n: i64) -> i64
+  requires ones(a, n) && n > 0
+  ensures result == 1
+{
+  let z: i64 = keep(a, n);
+  reveal ones;
+  return a[0] + z;
+}
+

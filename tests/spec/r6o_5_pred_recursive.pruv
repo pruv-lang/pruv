@@ -1,0 +1,13 @@
+// spec: R-6o-5 reject
+// an opaque pred body is inlined after verification, so it cannot call itself (here through a second opaque pred)
+pub opaque pred fn p(x: i64) -> bool {
+  return !q(x);
+}
+
+pub opaque pred fn q(x: i64) -> bool {
+  return p(x);
+}
+
+pub fn zero(x: i64) -> i64
+  ensures p(x) || !p(x)
+{ return 0; }

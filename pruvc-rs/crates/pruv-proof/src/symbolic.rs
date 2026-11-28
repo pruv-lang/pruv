@@ -1073,6 +1073,9 @@ pub struct FnVerifier<'a> {
     pub qstack: Vec<Ast>,
     /// P13o: opaque function name -> its uninterpreted symbol `opq!F`.
     pub(crate) opq_fns: HashMap<String, FuncDecl>,
+    /// L-gaps 24 (R-6o-5): the opaque functions whose revealed body (an equation pushed by `opq_occ`) reads an
+    /// aggregate; a goal applying one of them while it is revealed starts at the lemma stage, as an aggregate goal
+    pub(crate) opq_agg: HashSet<String>,
     /// 4.4k-VS (R-6g9-13): array sort -> `S(a, k)`, the length sum of the first `k` views of a view list (used only
     /// for a list term under a quantifier)
     view_sums: HashMap<String, FuncDecl>,
@@ -1633,6 +1636,7 @@ impl<'a> FnVerifier<'a> {
             seen: HashSet::new(),
             qstack: Vec::new(),
             opq_fns: HashMap::new(),
+            opq_agg: HashSet::new(),
             view_sums: HashMap::new(),
             view_term_sums: HashMap::new(),
             bv_shadow: HashMap::new(),
@@ -4207,6 +4211,12 @@ impl<'a> FnVerifier<'a> {
         self.qstack = outer;
         let b = b?;
         if first {
+            if !self.opq_agg.contains(&f.name) && !self.aggs.is_empty() {
+                let names: HashSet<&str> = self.aggs.iter().map(|(_, d)| d.name()).collect();
+                if b.applies_any(&names, 1) {
+                    self.opq_agg.insert(f.name.clone());
+                }
+            }
             st.pc.push(app.eq(&b));
         }
         Ok(())
@@ -7173,6 +7183,10 @@ impl<'a> FnVerifier<'a> {
             for (d, _) in self.dom_obligations(xa, &mut st0, &[], &envo)? {
                 self.prove_core(&st0, &[], &d, mk_pos(f.line, f.col), "opaque_total", &what, None);
             }
+        }
+        if f.pred {
+            // R-6o-5: an opaque pred is a contract-only definition: its totality is all there is to prove
+            return Ok(());
         }
         // LG16: the synthesized struct-invariant requires come first and are handled like the user's
         let invs: Vec<Expr> = self.inv_clauses(f, false).into_iter().map(|ic| ic.expr).collect();

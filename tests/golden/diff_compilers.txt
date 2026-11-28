@@ -2725,6 +2725,8 @@ runtime|runtime/lg23_payload_invariant [default]	2 cases: exit 2	llvm=c1fc561116
 runtime|runtime/lg24_generic_invariant [--no-verify]	2 cases: exit 2	llvm=29d02eb662de	rust=ef623a3614ac
 runtime|runtime/lg24_generic_invariant [--trust-callers]	2 cases: exit 2	llvm=6b131c6c3dfe	rust=ca1d4c9e4512
 runtime|runtime/lg24_generic_invariant [default]	2 cases: exit 2	llvm=6e606a6396f2	rust=55a61c5c3fa3
+runtime|runtime/lg24_opq_pred_entry [--no-verify]	2 cases: exit 2	llvm=ce9318e7a803	rust=8e988685373f
+runtime|runtime/lg24_opq_pred_entry [default]	2 cases: exit 2	llvm=3687066b8b48	rust=e67dfaa2fc5d
 runtime|runtime/lg25_str_view [--no-verify]	2 cases: exit 2	llvm=921d4d1663f9	rust=bcbe43b13927
 runtime|runtime/lg25_str_view [--trust-callers]	2 cases: exit 2	llvm=e8a47f088c6d	rust=3fc5e9c60913
 runtime|runtime/lg25_str_view [default]	2 cases: exit 2	llvm=94ef010a7045	rust=beedc31bb80e

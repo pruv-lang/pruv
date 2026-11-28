@@ -519,8 +519,9 @@ pub fn check_explicit(
     c.run(prog)?;
     crate::borrowed::check(prog, &c.place_functions)?;
     prog.contract_vec_slice = c.contract_vec_slice;
-    g4.remove_preds(&prog.functions);
-    prog.functions.retain(|f| !f.pred);
+    // R-6o-5: an opaque pred stays for the verifier (its symbol, reveal and totality); opaque_inline removes it
+    g4.remove_preds(&prog.functions, false);
+    prog.functions.retain(|f| !f.pred || f.opaque);
     Ok(c.tt)
 }
 
@@ -545,7 +546,7 @@ pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<Type
     c.run(prog)?;
     crate::borrowed::check(prog, &c.place_functions)?;
     prog.contract_vec_slice = c.contract_vec_slice;
-    prog.functions.retain(|f| !f.pred);
+    prog.functions.retain(|f| !f.pred || f.opaque); // R-6o-5: opaque_inline removes an opaque pred
     Ok(c.tt)
 }
 
@@ -1646,7 +1647,7 @@ impl Checker {
             self.ckind = "ensures";
             match self.x_template(f.line, f.col, &f.name, &fi) {
                 Ok(xa) => {
-                    if !f.pred && (fi.ret == boolt() || !x_has_bit(&xa))
+                    if (!f.pred || f.opaque) && (fi.ret == boolt() || !x_has_bit(&xa))
                         && (f.opaque || !(x_has_quant(&xa) || fi.params.iter().any(|p| x_record(p, &self.decls))))
                     {
                         f.x_auto = Some(xa);
@@ -9522,6 +9523,22 @@ impl Checker {
                 ));
             }
             if f.opaque {
+                // R-6o-5: an opaque pred is inlined after verification (opaque_inline), so its body must build here:
+                // a direct or mutual recursion is rejected (x_busy) and an argument must not be captured by a
+                // binder of the body (R-6-2), as for an expanded pred; opaque calls inside the body are inlined
+                // too, so their binders count (x_opq_captured)
+                if f.pred {
+                    let tpl = self.x_template(line, col, &n, &f)?;
+                    let mut names = HashSet::new();
+                    for arg in &e.args {
+                        x_names(arg, &mut names);
+                    }
+                    if let Some((var, kind)) = x_opq_captured(&tpl, &names, &self.x_memo) {
+                        return Err(terr(line, col, "call_in_contract",
+                            format!("function {} cannot be expanded in a contract: an argument uses the name {} that its body binds in {}", n, var, kind),
+                            format!("rename {} in the argument or in the body of {}", var, n)));
+                    }
+                }
                 // P13o: an opaque call stays a call; the verifier applies its uninterpreted symbol (code generation
                 // inlines it: opaque_inline)
                 e.opaque_c = true;
@@ -9580,6 +9597,34 @@ fn x_names(e: &Expr, names: &mut HashSet<String>) {
     }
     for child in crate::refine::kids(e) {
         x_names(child, names);
+    }
+}
+
+/// R-6o-5: the binder a call argument would be captured by once the call is inlined (opaque_inline): a binder of
+/// the template or, transitively, of an opaque call inside it, whose own template is inlined with it.
+fn x_opq_captured(e: &Expr, names: &HashSet<String>, memo: &HashMap<String, Expr>) -> Option<(String, String)> {
+    if let Some(q) = x_captured_quant(e, names) {
+        return Some((q.var.clone(), q.kind.clone()));
+    }
+    let mut found = None;
+    x_opq_calls(e, &mut |c| {
+        if found.is_none() {
+            if let Some(t) = memo.get(&c.name) {
+                found = x_opq_captured(t, names, memo);
+            }
+        }
+    });
+    found
+}
+
+fn x_opq_calls(e: &Expr, f: &mut impl FnMut(&Call)) {
+    if let Expr::Call(c) = e {
+        if c.opaque_c {
+            f(c);
+        }
+    }
+    for child in crate::refine::kids(e) {
+        x_opq_calls(child, f);
     }
 }
 
@@ -9963,10 +10008,21 @@ fn x_instantiate(tpl: &Expr, pnames: &[String], args: &[Expr], line: i64, col: i
 /// P13o (docs/L3_RESTRUCTURE_SPEC.md appendix P13o.1, check.py `opaque_inline`): after verification, every contract
 /// application of an opaque function becomes its expansion, so the code generators see what P06 would have produced
 /// (a run-time contract check evaluates the body). Idempotent: an inlined program has no opaque contract call left.
-pub fn opaque_inline(prog: &mut Program) {
+pub fn opaque_inline(prog: &mut Program, g4: Option<&mut crate::modules::G4>) {
     if !prog.functions.iter().any(|f| f.opaque) {
         return;
     }
+    opaque_inline_bodies(prog);
+    // R-6o-5: an opaque pred is contract-only; with every contract application inlined, no code generator sees it
+    if prog.functions.iter().any(|f| f.pred) {
+        if let Some(g) = g4 {
+            g.remove_preds(&prog.functions, true);
+        }
+        prog.functions.retain(|f| !f.pred);
+    }
+}
+
+fn opaque_inline_bodies(prog: &mut Program) {
     let defs: HashMap<String, (Vec<String>, Option<Expr>)> = prog
         .functions
         .iter()

@@ -1,0 +1,9 @@
+// spec: R-6o-5 reject
+// reading an opaque pred's body without `reveal` fails
+pub opaque pred fn ones(a: [i64], n: i64) -> bool {
+  return 0 <= n && n <= len(a) && (forall i in 0..n: a[i] == 1);
+}
+
+pub fn first(a: [i64], n: i64) -> i64
+  requires ones(a, n) && n > 0
+{ return a[0]; }

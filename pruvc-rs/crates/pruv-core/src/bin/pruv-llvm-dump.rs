@@ -28,7 +28,7 @@ fn line_for(path: &std::ffi::OsStr, o: &Opts) -> String {
         Err(pruv_core::modules::LoadError::Lang(e)) => return obj1("error", e.to_json_value()),
     };
     let mut prog = loaded.prog;
-    let g4 = match loaded.g4 {
+    let mut g4 = match loaded.g4 {
         Some(mut g) => {
             if let Err(e) = pruv_core::check::check_explicit(&mut prog, &mut g, &[]) {
                 return obj1("error", e.to_json_value());
@@ -44,7 +44,7 @@ fn line_for(path: &std::ffi::OsStr, o: &Opts) -> String {
     };
     // G9 A3: the LLVM backend lowers G9 programs; the G9 guard is gone.
     // like Python gen_llvm: a generic (or explicit-mode) program is specialized first (a specialization limit is a diagnostic)
-    pruv_core::check::opaque_inline(&mut prog); // P13o: like Python gen_rust / gen_llvm
+    pruv_core::check::opaque_inline(&mut prog, g4.as_mut()); // P13o: like Python gen_rust / gen_llvm
     match pruv_core::llvmgen::gen_llvm_any_g4(&prog, g4.as_ref(), o.verified, o.trust_callers, o.budget, o.target) {
         Ok((ir, bindings)) => dumps_sorted(&Json::Obj(vec![
             ("ir".to_string(), Json::Str(ir)),

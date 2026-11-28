@@ -45,7 +45,7 @@ fn line_for(path: &std::ffi::OsStr, o: &Opts, pkgs: &Pkgs) -> String {
         Err(pruv_core::modules::LoadError::Lang(e)) => return obj1("error", e.to_json_value()),
     };
     let mut prog = loaded.prog;
-    let g4 = match loaded.g4 {
+    let mut g4 = match loaded.g4 {
         Some(mut g) => {
             if let Err(e) = pruv_core::check::check_explicit(&mut prog, &mut g, &[]) {
                 return obj1("error", e.to_json_value());
@@ -63,7 +63,7 @@ fn line_for(path: &std::ffi::OsStr, o: &Opts, pkgs: &Pkgs) -> String {
     // G9 A2: the Rust backend lowers G9 programs; no guard here (a runtime requires it cannot lower is a Diag below)
     // like Python gen_rust (default foreign checks, no externs; a G6 program is lowered, the manifest is not part of the
     // dump): a generic (or explicit-mode) program is specialized first (a specialization limit is a diagnostic)
-    pruv_core::check::opaque_inline(&mut prog); // P13o: like Python gen_rust / gen_llvm
+    pruv_core::check::opaque_inline(&mut prog, g4.as_mut()); // P13o: like Python gen_rust / gen_llvm
     match pruv_core::codegen::gen_rust_ex_g4_with_entries(
         &prog, g4.as_ref(), o.verified, o.trust_callers, o.budget, "requires", &[], o.proven_entries,
     ) {

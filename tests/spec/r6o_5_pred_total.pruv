@@ -1,0 +1,5 @@
+// spec: R-6o-5 reject
+// an opaque pred's body is proved defined for every argument (here a[i] for i up to n is not guarded by len(a))
+pub opaque pred fn ones(a: [i64], n: i64) -> bool {
+  return 0 <= n && (forall i in 0..n: a[i] == 1);
+}

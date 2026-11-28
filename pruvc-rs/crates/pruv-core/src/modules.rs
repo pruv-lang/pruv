@@ -213,13 +213,15 @@ pub struct G4 {
 
 impl G4 {
     /// Keep item indices aligned with the checked program after predicate expansion.
-    pub(crate) fn remove_preds(&mut self, functions: &[Function]) {
-        if !functions.iter().any(|f| f.pred) {
+    /// `opaque`: also remove opaque preds (R-6o-5: they stay through verification and go in check::opaque_inline).
+    pub(crate) fn remove_preds(&mut self, functions: &[Function], opaque: bool) {
+        let gone = |f: &Function| f.pred && (opaque || !f.opaque);
+        if !functions.iter().any(gone) {
             return;
         }
         let mut next = 0;
         let indices: Vec<_> = functions.iter().map(|f| {
-            if f.pred {
+            if gone(f) {
                 None
             } else {
                 let index = next;
@@ -251,10 +253,10 @@ impl G4 {
                 }
             });
         }
-        let removed: HashSet<_> = functions.iter().filter(|f| f.pred).map(|f| f.name.as_str()).collect();
+        let removed: HashSet<_> = functions.iter().filter(|f| gone(f)).map(|f| f.name.as_str()).collect();
         self.entries.retain(|name| !removed.contains(name.as_str()));
         let mut functions = functions.iter();
-        self.fn_meta.retain(|_| !functions.next().unwrap().pred);
+        self.fn_meta.retain(|_| !gone(functions.next().unwrap()));
     }
 }
 

@@ -2861,3 +2861,34 @@ only `opaque fn` exists), so each helper only sees the predicate it needs.
   `probe_attempts`; reverted to 0, 1, 2. Fix-check: one required item, fixed (the LG31 comment on which attempt's
   status `frame_failed` stores for an aggregate goal); `probe_attempts` behaves as before.
 - Measured: `work/lgaps23/` (a5_root_times.txt, json_a*_times.txt, aggcmp.json, NOTES.md).
+
+## L-gaps 24: `opaque pred fn` (R-6o-5), G-DB33-1/2 attempt (4.4l-CT)
+
+The language change (`opaque pred fn`, SPEC R-6o-5, and the R-6-4 aggregate-goal extension) and its spec tests are
+merged on this branch. The 4.4l-CT sources stay on side branch `lair/pruv-l-gaps-24-ct-wip`, not merged. 4.4s-FK was
+not attempted (the time cap went to 4.4l-CT).
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| R-6o-5 | language feature | `opaque pred fn F(..) -> bool { body }`: a contract-only predicate whose body callers see only after `reveal F;`; without it they see the uninterpreted `opq!F` application (as `opaque fn`, R-6o-1..4). The body is proved total like an opaque fn body (`opaque_total`), a call from code is still `pred_in_code`, and after verification the predicate is dropped from the program and from the G4 module table like any `pred fn` (`check::opaque_inline` now takes the G4 table; `modules::remove_preds` gains an `opaque` flag). R-6-4: a goal applying a revealed opaque predicate whose body reads an aggregate counts as reading one (`agg_goal` checks `opq_agg` against the revealed set), so it starts at the lemma stage too | `tests/spec/r6o_5_opaque_pred.pruv` (accept), `r6o_5_pred_code_call` (`pred_in_code`), `r6o_5_pred_no_reveal` (`index_oob` with the "add reveal" hint), `r6o_5_pred_total` (`opaque_total`), `r6o_5_pred_recursive`, `r6o_5_pred_capture` and `r6o_5_pred_capture_nested` (`call_in_contract`: an opaque predicate call builds its template, so recursion and a captured argument are rejected as for `pred fn`, counting the binders of opaque calls inside the body), `r6o_5_pred_count0` (accept: a zero-argument revealed predicate with `count` starts at the lemma stage); `tests/runtime/lg24_opq_pred_entry` (host-entry `requires` with an opaque predicate checked at run time, both backends) |
+| 4.4l-CT (G-DB33-1/2) | proof gap, open (time) | Side branch `lair/pruv-l-gaps-24-ct-wip`: the L-gaps 23 sources with the tree predicates made `opaque pred fn`, each helper (`child` taking `from`, `member`, `set_header` with per-clause asserts) revealing only what it needs; `lines::parse_owned` no longer calls `json::check_subtrees`. Result (fresh verify, perf lock, load 2-3.3): a5_root 11.83 / 11.29 / 11.23 / 11.33 s (median 11.31 s) against 7.3 s on main; target about 8.8 s not met. a2_root fails: `child` postcondition (line 417, the child count +1 fact) is `verify_unknown` after 19.7 s, so the sources are not stable across roots. Solver time 8.0 s against 4.9 s on main (new: `member` 0.82 s, `child` 0.68 s, `set_header` 0.62 s, `record` +0.5 s, `open_container` +0.38 s) and about 1 s of other verifier overhead. Tried and reverted: per-clause asserts in `child` (0.68 -> 1.64 s); a count-split assert chain for a2 (the frame count assert is Unknown, a2 and a5 both slower) | json a0/a1 within noise (1.06 / 1.06 s, 0.89 / 0.93 s) |
+
+Next direction for 4.4l-CT: `opaque pred fn` halves the L-gaps 23 cost (17.5 -> 11.3 s) but the per-parent child
+count is still a quantified `record` ensures that the solver instantiates at every `child` call, and that is the a2
+failure. Carry the count as a ground fact instead (a ground per-parent count ensures on `record`, or let `container`
+carry the open parent's count as a plain variable), and then cut the helper overhead (`member`, `set_header`).
+
+- Checks: `--backend both` must_reject 1423/1423, l3_frontend 96/96, g8_frontend 39/39, spec_trace 1/1; `cargo test
+  --release` passed; `diff_rust --fuzz-count 20`; `m3_all --quick`; goldens updated for the new test files (they
+  shift the mutation seeds of later files); `--list-rows` gains the four runtime rows of the new test.
+  pkgs/ and lib are unchanged on this branch, so the L3 piece tests were not rerun.
+- Review A (Codex gpt-6.2-astra high, spec vs encoding, codegen not read): required findings were recursion through an
+  opaque predicate, an argument captured by a body binder, a zero-argument revealed predicate missing the lemma
+  stage, and the quantifier exception not stated in R-6o-2; all fixed (the call builds its template, `applies_any`
+  takes a minimum argument count, R-6o-2 states the exception). Its fix-check found two more: capture through a
+  nested opaque call (fixed: `x_opq_captured` counts nested binders, test `r6o_5_pred_capture_nested`) and the
+  exception reaching nested calls (R-6o-2 now says so; the behaviour is the existing, sound P13o one). The optional
+  struct-invariant finding was left: no code generator reads struct invariants (review B).
+- Review B (Claude opus high, codegen side): no required finding; its missing run-time test is
+  `tests/runtime/lg24_opq_pred_entry` (`--trust-callers` left out: it drops entry checks by design).
+- Measured: local `work/lgaps24/` (not committed; json_roots_times.txt, perf_cells.json, NOTES.md).
