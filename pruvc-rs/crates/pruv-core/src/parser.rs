@@ -1974,6 +1974,14 @@ impl Parser<'_> {
     /// At `(`: the argument list of a call or constructor.
     fn call_args(&mut self) -> R<Vec<Expr>> {
         self.bump();
+        // P12c: inside parentheses the `{` of a struct literal cannot be an if/while body
+        let saved = std::mem::replace(&mut self.in_head, false);
+        let r = self.call_args_rest();
+        self.in_head = saved;
+        r
+    }
+
+    fn call_args_rest(&mut self) -> R<Vec<Expr>> {
         let mut args = Vec::new();
         while !self.at(")", 0) {
             args.push(self.arg_expr()?);
@@ -4064,6 +4072,13 @@ impl Parser<'_> {
     }
 
     fn primary(&mut self) -> R<Expr> {
+        if self.in_head && (self.at("(", 0) || self.at("[", 0)) {
+            // P12c: a parenthesized or bracketed operand is delimited, so a struct literal inside it is not cut short
+            let saved = std::mem::replace(&mut self.in_head, false);
+            let r = self.primary();
+            self.in_head = saved;
+            return r;
+        }
         let t = self.peek(0).clone();
         let (line, col) = (t.line, t.col);
         if t.kind == Kind::Kw && t.val == "loop" {
