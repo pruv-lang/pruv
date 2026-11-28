@@ -1,0 +1,8 @@
+// spec: R-6p-7 accept
+pub struct Pair { value: i64 }
+pub fn swap(t: (Pair, i64)) -> (Pair, i64)
+  ensures result.1 == 7
+{
+  return (t.0, 7);
+}
+pub type PairAndInt = (Pair, i64);

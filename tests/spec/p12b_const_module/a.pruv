@@ -1,0 +1,4 @@
+// spec: R-6p-7 accept
+const BASE: i64 = 3;
+pub const LIMIT: i64 = BASE + 1;
+pub type Width = i64;

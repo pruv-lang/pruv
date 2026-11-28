@@ -1,1 +1,1 @@
-{"stage": "parse", "code": "alias_module"}
+{"stage":"type","code":"alias_cycle"}

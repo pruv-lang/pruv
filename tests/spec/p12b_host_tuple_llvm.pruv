@@ -1,0 +1,2 @@
+// spec: R-6p-7 reject
+pub fn pair(x: i64) -> (i64, u8) { return (x, 1); }

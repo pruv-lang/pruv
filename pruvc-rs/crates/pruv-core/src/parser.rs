@@ -19,8 +19,24 @@ pub fn parse_source(src: &str) -> R<Program> {
 
 /// One parsed source file (G4 A0): the program plus the parse-level module data (Python `Program.mods` / `has_pub` /
 /// `items`, and the `pub` flag of every function / type declaration).
+pub(crate) struct DeferredFile {
+    pub src: String,
+    pub nominals: Vec<(String, bool)>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AliasPosition {
+    pub ty: GType,
+    pub line: i64,
+    pub col: i64,
+    pub generic: bool,
+    pub fixed_ok: bool,
+}
+
 pub struct ParsedFile {
+    pub(crate) positions: Vec<AliasPosition>,
     pub prog: Program,
+    pub(crate) deferred: Option<DeferredFile>,
     pub mods: Vec<ModDecl>,
     pub has_pub: bool,
     pub items: Vec<Item>,
@@ -35,8 +51,19 @@ fn normalized_chars(src: &str) -> Vec<char> {
 
 /// Parses one file whose line numbers carry the module file number `tag` (0 = a plain, legacy-style file).
 pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
+    parse_with_shapes(src, tag, None, false)
+}
+
+pub(crate) type ResolveShape<'a> = dyn Fn(&GType, i64, i64) -> R<GType> + 'a;
+
+/// A module can need an imported alias before its body can be parsed (constant widths and tuple patterns).
+/// Expose its declarations to the loader, then finish parsing once the module graph exists.
+pub(crate) fn parse_with_shapes(src: &str, tag: usize, shapes: Option<&ResolveShape>, loading: bool) -> R<ParsedFile> {
     let chars = normalized_chars(src);
     let mut p = Parser {
+        shapes,
+        positions: vec![],
+        needs_shape: false,
         t: lex_tagged(&chars, tag)?,
         i: 0,
         depth: 0,
@@ -62,18 +89,47 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
     };
     p.impl_collect();
     let alias_order = p.alias_collect()?;
-    let consts = p.const_prepass()?;
-    p.alias_validate(alias_order)?;
-    let mut prog = p.program()?;
+    let parsed = (|| {
+        let consts = p.const_prepass()?;
+        p.alias_validate(alias_order.clone())?;
+        let mut prog = p.program()?;
+        prog.consts = consts;
+        Ok(prog)
+    })();
+    let mut prog = match parsed {
+        Err(_) if loading && p.needs_shape => {
+            // Alias shapes that depend on a local array length are validated during the final parse.
+            // Scalar aliases can be read immediately, even when this file imports a constant's width.
+            let mut prog = Program::default();
+            for name in alias_order {
+                p.scope.clear();
+                p.alias_busy.clear();
+                p.alias_generic.clear();
+                if p.alias_validate(vec![name.clone()]).is_ok() {
+                    prog.aliases.push(p.aliases[&name].item());
+                }
+            }
+            let mut mods = Vec::new();
+            let mut nominals = Vec::new();
+            for i in 0..p.t.len() {
+                if p.t[i].kind == Kind::Kw && matches!(p.t[i].val.as_str(), "struct" | "enum") {
+                    if let Some(t) = p.t.get(i + 1).filter(|t| t.kind == Kind::Id) {
+                        nominals.push((t.val.clone(), i > 0 && p.t[i-1].val == "pub"));
+                    }
+                }
+                if p.t[i].kind == Kind::Kw && p.t[i].val == "mod" {
+                    p.i = i;
+                    mods.push(p.mod_decl()?);
+                }
+            }
+            return Ok(ParsedFile { prog, positions: vec![], deferred: Some(DeferredFile { src: src.to_owned(), nominals }), mods, has_pub: true,
+                items: vec![], fn_pub: vec![], ty_pub: vec![] });
+        }
+        other => other?,
+    };
     if !p.aliases.is_empty() {
         let mut al: Vec<&AliasDef> = p.aliases.values().collect();
         al.sort_by_key(|a| a.rhs);
-        if tag != 0 || p.has_pub || !p.mods.is_empty() {
-            // P9 row P9a-1: aliases in module programs (paths, `pub type`) are not designed yet.
-            return Err(PruvError::new("parse", al[0].tok.line, al[0].tok.col, "alias_module",
-                "type aliases are available only in a single-file program without `pub` or `mod` items (parity row P9a-1)",
-                "write the type out, or keep the program in one file"));
-        }
         for t in &prog.types {
             let (n, l, c) = match t { TypeDecl::Struct(d) => (&d.name, d.line, d.col), TypeDecl::Enum(d) => (&d.name, d.line, d.col) };
             if p.aliases.contains_key(n) {
@@ -82,26 +138,9 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
             }
         }
         for a in al {
-            if a.used.get() {
-                prog.aliases.push(AliasItem { name: a.tok.val.clone(), params: a.params.clone(), rhs: a.key.borrow().clone() });
+            if tag != 0 || a.used.get() {
+                prog.aliases.push(a.item());
             }
-        }
-    }
-    if let Some(first) = consts.first() {
-        if tag != 0 || p.has_pub || !p.mods.is_empty() {
-            // P7 row P7-3: constants in module programs (paths, `pub const`) are not designed yet.
-            return Err(PruvError::new("parse", first.line, first.col, "const_module",
-                "constants are available only in a single-file program without `pub` or `mod` items (parity row P7-3)",
-                "write the value inline, or keep the program in one file"));
-        }
-    }
-    prog.consts = consts;
-    if let Some(first) = p.tuples.first() {
-        if tag != 0 || p.has_pub || !p.mods.is_empty() {
-            // P6 row P6-2: module identities of the synthetic tuple structs are not designed yet.
-            return Err(PruvError::new("parse", first.2, first.3, "tuple_module",
-                "tuple types are available only in a single-file program without `pub` or `mod` items (parity row P6-2)",
-                "declare a named struct for this module program"));
         }
     }
     for (name, comps, line, col) in std::mem::take(&mut p.tuples) {
@@ -113,7 +152,7 @@ pub fn parse_file(src: &str, tag: usize) -> R<ParsedFile> {
         p.ty_pub.push(false);
         p.items.push(Item::Ty(prog.types.len() - 1));
     }
-    Ok(ParsedFile { prog, mods: p.mods, has_pub: p.has_pub, items: p.items, fn_pub: p.fn_pub, ty_pub: p.ty_pub })
+    Ok(ParsedFile { prog, positions: p.positions, deferred: None, mods: p.mods, has_pub: p.has_pub, items: p.items, fn_pub: p.fn_pub, ty_pub: p.ty_pub })
 }
 
 /// vparser `_sniff_explicit`: a root that failed to parse: does it use module syntax (a `mod` / `pub` token)?
@@ -435,7 +474,10 @@ fn is_upper(s: &str) -> bool {
 /// P9b-3: the `end` of the `::` that a generic impl block splices after `Self` (`Self::<T, ..>`) in an expression
 const SELF_TARGS: i64 = -2;
 
-struct Parser {
+struct Parser<'a> {
+    positions: Vec<AliasPosition>,
+    shapes: Option<&'a ResolveShape<'a>>,
+    needs_shape: bool,
     t: Vec<Tok>,
     i: usize,
     /// Depth of the AST path being built (recursion plus binary/postfix chains that pile up to the left). Beyond MAX_DEPTH it stops with an internal error,
@@ -485,6 +527,7 @@ struct Parser {
 /// P9: one transparent type alias of the file.
 #[derive(Debug, Clone)]
 struct AliasDef {
+    is_pub: bool,
     tok: Tok,
     params: Vec<String>,
     /// token index of the right side
@@ -508,7 +551,21 @@ fn owned_key(k: &str) -> bool {
 /// but small enough that the later stages' recursion fits in the 1GB stack (RESULTS §20).
 pub const MAX_DEPTH: usize = 50_000;
 
-impl Parser {
+impl AliasDef {
+    fn item(&self) -> AliasItem {
+        AliasItem { line: self.tok.line, col: self.tok.col, is_pub: self.is_pub, name: self.tok.val.clone(),
+            params: self.params.clone(), rhs: self.key.borrow().clone() }
+    }
+}
+
+impl Parser<'_> {
+    fn shape(&mut self, g: GType, line: i64, col: i64) -> R<GType> {
+        if !g.to_key().contains("crate::") { return Ok(g); }
+        if let Some(resolve) = self.shapes { return resolve(&g, line, col); }
+        self.needs_shape = true;
+        Err(PruvError::new("type", line, col, "unknown_type", "this type requires module resolution", ""))
+    }
+
     // ---- helpers ----
     fn idx(&self, k: usize) -> usize {
         (self.i + k).min(self.t.len() - 1)
@@ -600,6 +657,7 @@ impl Parser {
     /// P7: reads every `const NAME: T = expr;` item up front and evaluates them with a closed evaluator
     /// (literals, other constants, arithmetic and int-width casts), so uses anywhere in the file parse as literals.
     fn const_prepass(&mut self) -> R<Vec<ConstItem>> {
+        let mut public = std::collections::HashSet::new();
         let mut decls: Vec<(Tok, &'static intwidth::IntWidth, Expr)> = Vec::new();
         let mut j = 0;
         while j < self.t.len() {
@@ -620,11 +678,13 @@ impl Parser {
                     "rename it with capital letters, digits and _"));
             }
             self.expect(":")?;
-            let mut tt = self.next();
-            if tt.kind == Kind::Id && self.aliases.contains_key(&tt.val) && !self.at("::", 0) {
-                // P9: a constant typed with an alias: the alias's expansion (marks it used; reports alias cycles)
-                let g = self.alias_use(&tt, false)?;
-                tt.val = g.to_key();
+            let mut tt = self.peek(0).clone();
+            if self.at("crate", 0) || self.at_alias(0) {
+                let g = self.type_g(false)?.0;
+                tt.val = self.shape(g, tt.line, tt.col)?.to_key();
+                tt.kind = Kind::Id;
+            } else {
+                self.bump();
             }
             let w = match intwidth::of(&tt.val) {
                 Some(w) if tt.kind == Kind::Id => w,
@@ -641,6 +701,7 @@ impl Parser {
                 return Err(PruvError::new("parse", n.line, n.col, "const_shadow",
                     format!("constant {} is declared twice", repr_str(&n.val)), "remove one declaration"));
             }
+            if j > 0 && self.t[j-1].val == "pub" { public.insert(n.val.clone()); }
             decls.push((n, w, v));
             j = self.i;
         }
@@ -649,7 +710,7 @@ impl Parser {
         let mut out = Vec::new();
         for k in 0..decls.len() {
             let v = ev.value_of(k)?;
-            out.push(ConstItem { line: decls[k].0.line, col: decls[k].0.col, name: decls[k].0.val.clone(),
+            out.push(ConstItem { is_pub: public.contains(&decls[k].0.val), line: decls[k].0.line, col: decls[k].0.col, name: decls[k].0.val.clone(),
                 ty: decls[k].1.name.to_string(), value: v });
         }
         for c in &out {
@@ -715,7 +776,7 @@ impl Parser {
                     format!("type alias {} is declared twice", repr_str(&n.val)), "remove one declaration"));
             }
             order.push(n.val.clone());
-            self.aliases.insert(n.val.clone(), AliasDef { tok: n, params, rhs, key: Default::default(), used: Default::default() });
+            self.aliases.insert(n.val.clone(), AliasDef { is_pub: j > 0 && self.t[j-1].val == "pub", tok: n, params, rhs, key: Default::default(), used: Default::default() });
             // skip to the closing `;` (a `;` inside `[T; N]` is nested)
             let mut depth = 0i64;
             let mut k = rhs;
@@ -841,7 +902,7 @@ impl Parser {
     fn fixed_array_type(&mut self, open: &Tok, e: &Tok, fixed_ok: bool) -> R<GType> {
         let elem = if let Some(t) = self.scope.get(&e.val).filter(|t| !t.is_const_arg()) {
             t.clone()
-        } else if matches!(e.val.as_str(), "bool" | "str") || intwidth::of(&e.val).is_some() {
+        } else if e.val.starts_with("crate::") || matches!(e.val.as_str(), "bool" | "str") || intwidth::of(&e.val).is_some() {
             GType::new(&e.val, Vec::new())
         } else {
             return Err(fixed_element(e.line, e.col, &e.val));
@@ -858,7 +919,7 @@ impl Parser {
             if elem.owner.is_some() {
                 return Err(fixed_element(e.line, e.col, &e.val));
             }
-            fixed_size(open.line, open.col, &elem, k)?;
+            if !elem.name.starts_with("crate::") { fixed_size(open.line, open.col, &elem, k)?; }
         }
         Ok(GType::fixed_with_len(elem, n))
     }
@@ -1632,10 +1693,7 @@ impl Parser {
             let is_pub = pub_tok.is_some();
             if self.at("const", 0) {
                 let ct = self.next();
-                if let Some(pt) = &pub_tok {
-                    return Err(PruvError::new("parse", pt.line, pt.col, "const_module",
-                        "`pub const` is not available yet (parity row P7-3)", "drop `pub`; the constant stays private"));
-                }
+                self.has_pub |= is_pub;
                 // already parsed and evaluated by const_prepass: skip to the closing `;`
                 while !self.at(";", 0) {
                     if self.peek(0).kind == Kind::Eof {
@@ -1950,7 +2008,9 @@ impl Parser {
         let (t, segs) = self.crate_path(true)?;
         let (line, col) = (t.line, t.col);
         let path = format!("crate::{}", segs.join("::"));
-        let last_upper = segs.last().map_or(false, |s| is_upper(s));
+        let last_upper = segs.last().is_some_and(|s| is_upper(s));
+        let const_path = last_upper && segs.last().unwrap().bytes().all(|b| !b.is_ascii_lowercase())
+            && segs[..segs.len()-1].iter().all(|s| !is_upper(s));
         if self.at("::", 0) && self.at("<", 1) {
             let targs = self.expr_targs()?;
             if !(self.at("::", 0) || self.at("(", 0) || (self.at("{", 0) && last_upper)) {
@@ -2005,9 +2065,12 @@ impl Parser {
             let args = self.call_args()?;
             return Ok(Expr::Call(Call { line, col, name: path, args, ty: None, targs: None, inst: None, old: None, opaque_c: false }));
         }
-        if self.at("{", 0) && last_upper {
+        if self.at("{", 0) && last_upper && (!const_path || self.at("}", 1) || self.at(":", 2)) {
             let fields = self.struct_inits()?;
             return Ok(Expr::StructLit(StructLit { line, col, name: path, fields, ty: None, targs: None, inst: None }));
+        }
+        if const_path {
+            return Ok(Expr::Var(Var { line, col, name: path, ty: None }));
         }
         if segs.len() < 2 {
             return Err(PruvError::new(
@@ -2426,10 +2489,10 @@ impl Parser {
     /// The structured form of `type_r`.
     fn type_g(&mut self, allow: bool) -> R<(GType, Option<Refinement>)> {
         let fixed_ok = std::mem::replace(&mut self.fixed_ok, false);
-        if self.at_ident(crate::lexer::REF_IDENT, 0) && (self.at("[", 1) || self.at_ident("str", 1) || self.at_alias(1)) {
+        if self.at_ident(crate::lexer::REF_IDENT, 0) && (self.at("[", 1) || self.at_ident("str", 1) || self.at_alias(1) || self.at("crate", 1)) {
             let rt = self.next();
             let (base, refinement) = self.type_g(allow)?;
-            if !(base.is_array() || base == GType::str()) {
+            if !(base.is_array() || base == GType::str() || base.name.starts_with("crate::")) {
                 return Err(self.err("`ref` takes an array or str type", "write ref [T] or ref str", Some(&rt)));
             }
             return Ok((GType::new("@ref", vec![base]), refinement));
@@ -2487,6 +2550,14 @@ impl Parser {
                         return Err(fixed_element(e.line, e.col, &e.val));
                     }
                     alias_elem = Some(g);
+                }
+            }
+            if e.val.starts_with("crate::") && self.at("<", 0) {
+                let applied = self.named_type(&e, false)?;
+                if self.at(";", 0) && !self.at("<=", 1) {
+                    e.val = self.shape(applied, e.line, e.col)?.to_key();
+                } else {
+                    alias_elem = Some(applied);
                 }
             }
             if self.at(";", 0) && !self.at("<=", 1) {
@@ -2576,6 +2647,12 @@ impl Parser {
                 ));
             }
             ty = self.named_type(&n, fixed_ok)?;
+            if n.val.starts_with("crate::") {
+                let generic = self.alias_generic.last().copied().unwrap_or(!self.scope.is_empty());
+                if generic || !fixed_ok {
+                    self.positions.push(AliasPosition { ty: ty.clone(), line: n.line, col: n.col, fixed_ok, generic });
+                }
+            }
         }
         if self.at("|", 0) {
             if !allow {
@@ -2699,11 +2776,12 @@ impl Parser {
         self.fixed_ok = true; // P7-1 B: a fixed-length array result is returned by value
         let (ret, ret_refine) = self.type_r(true)?;
         if foreign.is_some() {
-            let signature = || std::iter::once(&ret).chain(params.iter().map(|p| &p.ty));
-            if signature().any(|ty| matches!(ty.as_str(), "array_u16" | "@ref<array_u16>")) {
+            let signature = std::iter::once(&ret).chain(params.iter().map(|p| &p.ty))
+                .map(|k| self.shape(GType::from_key(k), kw.line, kw.col).map(|g| g.to_key())).collect::<R<Vec<_>>>()?;
+            if signature.iter().any(|ty| matches!(ty.as_str(), "array_u16" | "@ref<array_u16>")) {
                 return Err(self.small_int_unsupported(&kw, "[u16] in foreign signatures requires P12"));
             }
-            if signature().any(|ty| intwidth::is_narrow(ty)) {
+            if signature.iter().any(|ty| intwidth::is_narrow(ty)) {
                 return Err(self.small_int_unsupported(&kw, "non-i64 integers in foreign signatures require P12"));
             }
         }
@@ -3054,7 +3132,8 @@ impl Parser {
             let tmp = format!("pruv_tup_d{}", self.tup_tmp);
             self.tup_tmp += 1;
             let mut lets = Vec::new();
-            Self::type_pat(&g, &pats, pl, pc, &mut lets)?;
+            let shape = self.shape(g.clone(), pl, pc)?;
+            Self::type_pat(&shape, &pats, pl, pc, &mut lets)?;
             let save = std::mem::take(&mut self.pending);
             self.lower_pat(&tmp, pats, pl, pc);
             // fill each lowered let with its component type, in lowering order

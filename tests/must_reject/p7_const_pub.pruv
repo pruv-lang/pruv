@@ -1,2 +1,3 @@
-pub const N: i64 = 3;
-pub fn f() -> i64 { return N; }
+// spec: R-6p-7 reject
+pub const X: i64 = 1;
+const X: i64 = 2;

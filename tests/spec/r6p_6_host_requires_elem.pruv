@@ -1,0 +1,8 @@
+// spec: R-6p-6 accept
+// P12a follow-up: a host-entry `requires` that reads an element of a borrowed [u16] parameter
+pub fn after_mark(sid: [u16], i: u32) -> u16
+  requires i64(i) + 1 < len(sid)
+  requires i64(sid[i]) == 55296
+{
+  return u16(sid[i64(i) + 1]);
+}

@@ -349,6 +349,27 @@ fn take_array_abi_error_at(
     None
 }
 
+pub(crate) fn tuple_host_error(prog: &Program, g4: Option<&crate::modules::G4>) -> Option<crate::diagnostic::PruvError> {
+    if !prog.types.iter().any(|d| crate::gtype::is_tuple_name(d.name())) { return None; }
+    fn contains(ty: &str, tt: &TypeTable, seen: &mut std::collections::HashSet<String>) -> bool {
+        crate::gtype::dependencies(&GType::from_key(ty)).iter().any(|n|
+            crate::gtype::is_tuple_name(n) || seen.insert(n.clone()) && tt.decl(n)
+                .is_some_and(|d| d.all_fields().iter().any(|f| contains(&f.ty, tt, seen))))
+    }
+    let tt = crate::emit_common::make_type_table(prog);
+    for (i, f) in prog.functions.iter().enumerate() {
+        if g4.and_then(|g| g.fn_meta.get(i)).is_some_and(|m| m.host_entry)
+            || prog.explicit.as_ref().and_then(|g| g.fns.get(i)).is_some_and(|m| m.host_entry) {
+            let mut seen = std::collections::HashSet::new();
+            if std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty)).any(|t| contains(t, &tt, &mut seen)) {
+                return Some(crate::diagnostic::PruvError::new("codegen", f.line, f.col, "tuple_host_unsupported",
+                    "LLVM host tuple layout requires bundle P12e", "use the Rust backend"));
+            }
+        }
+    }
+    None
+}
+
 /// Both the LLVM backend and its bindings require a C ABI for host entries.
 pub fn owned_collection_abi_error(
     prog: &Program,
@@ -357,7 +378,7 @@ pub fn owned_collection_abi_error(
     let err = |line, col, message| {
         crate::diagnostic::PruvError::new("codegen", line, col, "unsupported_type", message, "use the Rust backend")
     };
-    if let Some(e) = llvm_param_abi_error(prog, g4) {
+    if let Some(e) = tuple_host_error(prog, g4).or_else(|| llvm_param_abi_error(prog, g4)) {
         return Some(e);
     }
     let vec_elems = crate::llvmgen::recursive_vec_elements(prog);
@@ -523,7 +544,7 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
         None => Vec::new(),
     };
     if prog.functions.iter().zip(&hosts).any(|(f, &host)| {
-        host && f.foreign.is_none() && crate::emit_common::has_llvm_unsupported_int_sig(f, &tt, false)
+        host && f.foreign.is_none() && crate::emit_common::has_llvm_unsupported_int_sig(f, &tt)
     }) {
         return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
     }

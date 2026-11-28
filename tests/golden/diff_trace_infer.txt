@@ -123,6 +123,11 @@ fuzz|fuzz:41	40 cases: obl=5 5, obl=6 4, obl=2 3, obl=4 3, ...	0/--infer=b7ecc0d
 fuzz|fuzz:56	40 cases: obl=7 4, obl=10 3, obl=13 2, obl=2 2, ...	0/--infer=a270ffa66461	1/--infer=5910eafd2ee2	2/--infer=0481aba11592	3/--infer=cffdca54cc99	4/--infer=e46b6e9548b1	5/--infer=85e226a9375d	6/--infer=cb5d4b9e3e7b	7/--infer=aedd1939a4bf	8/--infer=341bb13f62dc	9/--infer=06634db9c553	10/--infer=61164ab82b48	11/--infer=0c0ae7844f42	12/--infer=819c723a4163	13/--infer=f1eedac435e8	14/--infer=14bac2792dfb	15/--infer=d95016033b23	16/--infer=5e16bdefcab2	17/--infer=46d0cb88e475	18/--infer=daa0f88e0262	19/--infer=15f33885f163	20/--infer=c2b0701685d7	21/--infer=24cbdbb6928f	22/--infer=e25c18aaaa90	23/--infer=d47f909bddb1	24/--infer=6f574f41b4ba	25/--infer=56571c756780	26/--infer=f037d94c44c8	27/--infer=6795c8ea6ab8	28/--infer=3ad2b9a400ae	29/--infer=b67d55d5aa7e	30/--infer=484f971395ee	31/--infer=e8c632ece59c	32/--infer=51d1c61b5b11	33/--infer=611667ae202f	34/--infer=55f7e5755183	35/--infer=4be331582a4e	36/--infer=51aec10ce807	37/--infer=2ac875ee7497	38/--infer=2f012cbe0d74	39/--infer=55f7e5755183
 fuzz|fuzz:57	40 cases: obl=6 6, obl=3 3, obl=7 3, obl=8 3, ...	0/--infer=d9dc6d679090	1/--infer=8824160fc3db	2/--infer=17adceace66e	3/--infer=2c457f1b211c	4/--infer=a693eab8ab58	5/--infer=33cc103f83f2	6/--infer=6c64acc675f0	7/--infer=7a2f7dbfec8f	8/--infer=072f54f996aa	9/--infer=a7a0d426988e	10/--infer=45b0152184a9	11/--infer=39f25fb97981	12/--infer=55044cf6a94d	13/--infer=094869f26c6c	14/--infer=f59f35ef8ba2	15/--infer=b165ff57f6c1	16/--infer=110214fdb964	17/--infer=e1750d9b81c5	18/--infer=e2b1a381d466	19/--infer=9184092f3520	20/--infer=b8bb5ba6d0e0	21/--infer=4617799b5da8	22/--infer=8837c34b5ce2	23/--infer=7bc5f9aa8cbe	24/--infer=84bfc1f691ab	25/--infer=3527eacb7422	26/--infer=11c0bd3c773e	27/--infer=56a42ec14f50	28/--infer=9b026e036dc2	29/--infer=d5aa1bcd11c0	30/--infer=839ec0900970	31/--infer=3204c8091602	32/--infer=f6f32bf172f9	33/--infer=3527eacb7422	34/--infer=b131810015b7	35/--infer=c060daf51acf	36/--infer=562037b1c9a6	37/--infer=1d148b05e37a	38/--infer=8da4cba5d0d8	39/--infer=537c724f7b37
 g4_reject|tests/must_reject/g4_lgaps20_fixed_module_oob/root.pruv	1 case: obl=3 1	--infer=94ce23575263
+g4_reject|tests/must_reject/g4_p12b_cycle/root.pruv	1 case: obl=0 1	--infer=774f0f9d914c
+g4_reject|tests/must_reject/g4_p12b_private_alias/root.pruv	1 case: obl=0 1	--infer=fda2560f1f50
+g4_reject|tests/must_reject/g4_p12b_private_const/root.pruv	1 case: obl=0 1	--infer=2d85bbc3e030
+g4_reject|tests/must_reject/g4_p12b_public_alias/root.pruv	1 case: obl=0 1	--infer=5db78dc87a5d
+g4_reject|tests/must_reject/g4_p12b_signature_alias/root.pruv	1 case: obl=0 1	--infer=09acb09b47e3
 g4_reject|tests/must_reject/g4_r01_missing_child/root.pruv	1 case: obl=0 1	--infer=33c3b7eb30c5
 g4_reject|tests/must_reject/g4_r02_duplicate_module/root.pruv	1 case: obl=0 1	--infer=6fd9217d21e5
 g4_reject|tests/must_reject/g4_r03_module_alias/root.pruv	1 case: obl=0 1	--infer=84316e034974
@@ -1308,6 +1313,7 @@ must_reject|tests/must_reject/lgaps9_str_bytes_len.pruv	1 case: obl=1 1	--infer=
 must_reject|tests/must_reject/lgaps9_views_subview_len.pruv	1 case: obl=5 1	--infer=2045f5952500
 must_reject|tests/must_reject/lgaps9_views_subview_sum.pruv	1 case: obl=5 1	--infer=38c14c9536a5
 must_reject|tests/must_reject/p12a_inout_u8_entry.pruv	1 case: obl=0 1	--infer=cb8da9103c57
+must_reject|tests/must_reject/p12b_llvm_tuple.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 must_reject|tests/must_reject/p1_add_overflow.pruv	1 case: obl=1 1	--infer=188377af221c
 must_reject|tests/must_reject/p1_bit_and.pruv	1 case: obl=0 1	--infer=8211483d2318
 must_reject|tests/must_reject/p1_cast_in_contract.pruv	1 case: obl=0 1	--infer=1a9086e48014
@@ -1401,7 +1407,7 @@ must_reject|tests/must_reject/p6_index.pruv	1 case: obl=0 1	--infer=8b0174252e19
 must_reject|tests/must_reject/p6_literal_untyped.pruv	1 case: obl=0 1	--infer=4531535ca0dc
 must_reject|tests/must_reject/p6_llvm_owned.pruv	1 case: obl=2 1	--infer=aaae4ab77c88
 must_reject|tests/must_reject/p6_match_pattern.pruv	1 case: obl=0 1	--infer=fb99920cff41
-must_reject|tests/must_reject/p6_module.pruv	1 case: obl=0 1	--infer=485f7c2f00d2
+must_reject|tests/must_reject/p6_module.pruv	1 case: obl=0 1	--infer=b464e0ba9334
 must_reject|tests/must_reject/p6_moved_reuse.pruv	1 case: obl=0 1	--infer=5652f0d01b42
 must_reject|tests/must_reject/p6_needs_type.pruv	1 case: obl=0 1	--infer=44bab0facc3f
 must_reject|tests/must_reject/p6_partial_move.pruv	1 case: obl=0 1	--infer=ef1899206c34
@@ -1431,7 +1437,7 @@ must_reject|tests/must_reject/p7_const_for_binder.pruv	1 case: obl=0 1	--infer=8
 must_reject|tests/must_reject/p7_const_mismatch.pruv	1 case: obl=0 1	--infer=ba0627e9257b
 must_reject|tests/must_reject/p7_const_neg_div.pruv	1 case: obl=0 1	--infer=cf68ab3a7598
 must_reject|tests/must_reject/p7_const_neg_range.pruv	1 case: obl=0 1	--infer=08695c93ec24
-must_reject|tests/must_reject/p7_const_pub.pruv	1 case: obl=0 1	--infer=23087af14663
+must_reject|tests/must_reject/p7_const_pub.pruv	1 case: obl=0 1	--infer=805b2827fc14
 must_reject|tests/must_reject/p7_const_result.pruv	1 case: obl=0 1	--infer=7ce9a26ba7ee
 must_reject|tests/must_reject/p7_const_shadow.pruv	1 case: obl=0 1	--infer=12616c96d4e1
 must_reject|tests/must_reject/p7_const_type.pruv	1 case: obl=0 1	--infer=a329f7fbcec3
@@ -1532,7 +1538,7 @@ must_reject|tests/must_reject/p9_alias_cycle.pruv	1 case: obl=0 1	--infer=2808fe
 must_reject|tests/must_reject/p9_alias_duplicate.pruv	1 case: obl=0 1	--infer=e25394e00fba
 must_reject|tests/must_reject/p9_alias_false_ensures.pruv	1 case: obl=3 1	--infer=01c32cdfc445
 must_reject|tests/must_reject/p9_alias_growing_cycle.pruv	1 case: obl=0 1	--infer=94d247e8ca1a
-must_reject|tests/must_reject/p9_alias_module.pruv	1 case: obl=0 1	--infer=b50d46d3ba07
+must_reject|tests/must_reject/p9_alias_module.pruv	1 case: obl=0 1	--infer=1aceb2a1e415
 must_reject|tests/must_reject/p9_alias_param_shadow.pruv	1 case: obl=0 1	--infer=1a77d5e5cbf1
 must_reject|tests/must_reject/p9_alias_ref_scalar.pruv	1 case: obl=0 1	--infer=4f89025e86cc
 must_reject|tests/must_reject/p9_alias_refine_false.pruv	1 case: obl=1 1	--infer=b9af73be3803

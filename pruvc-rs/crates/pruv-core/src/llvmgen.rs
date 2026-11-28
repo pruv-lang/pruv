@@ -10398,6 +10398,7 @@ pub fn gen_llvm_with_specializations(
     }
     let native_views = view_lists_to_native(prog);
     let prog = native_views.as_ref().unwrap_or(prog);
+    if let Some(e) = crate::bindings::tuple_host_error(prog, None) { return Err(GenError::Diag(e)); }
     // Built only when a host-facing function exists (the generator builds its own table later).
     let mut tt0 = None;
     // P9b-2: a method is never a host entry (R-6x-5), so its signature is not a host boundary
@@ -10410,7 +10411,7 @@ pub fn gen_llvm_with_specializations(
         // P12a: only a host entry or a foreign fn is a host boundary; a module `pub` function is internal
         if (public || f.foreign.is_some()) && host && {
             let table = tt0.get_or_insert_with(|| crate::emit_common::make_type_table(prog));
-            crate::emit_common::has_llvm_unsupported_int_sig(f, table, !host)
+            crate::emit_common::has_llvm_unsupported_int_sig(f, table)
         } {
             return Err(GenError::Diag(crate::diagnostic::PruvError::new(
                 "codegen", f.line, f.col, "small_int_unsupported",

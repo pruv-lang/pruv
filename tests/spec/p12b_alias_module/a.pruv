@@ -1,0 +1,5 @@
+// spec: R-6p-7 accept
+pub struct Fault { value: i64 }
+pub type Res<T> = Result<T, Fault>;
+pub type Code = i64;
+pub fn wrap(x: Code) -> Res<i64> { return Ok::<i64, Fault>(x); }

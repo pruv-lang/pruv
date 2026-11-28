@@ -1,0 +1,2 @@
+// spec: R-6p-7 reject
+pub type Y = crate::a::X;

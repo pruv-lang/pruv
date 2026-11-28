@@ -37,6 +37,7 @@ a UTF-8 check followed by one copy reads each byte twice and is still O(n)).
 | `x: u8` / `-> u8` (likewise `u16 u32 u64 usize i8 i16 i32 isize`) | `pub fn f(x: u8) -> u8` |
 | read `a: [u8]`, `sid: [u16]` | `pub fn f(a: &[u8], sid: &[u16])` |
 | `take s: [u16]` / `inout s: [u16]` | `s: Vec<u16>` / `s: &mut [u16]` (the `[i64]` rules) |
+| owned result `-> [u16]` (a `take` parameter returned with `move`, or `copy()`) | `-> Vec<u16>` (tests/spec/r6p_6_host_owned) |
 | `inout x: u8` (any integer) | `type/entry_signature`, as for `i64` (R-6g-4) |
 
 - Each parameter and the result use the table on their own. `[u16]` is 16-bit code units; `0xD800` passes unchanged. No
@@ -74,6 +75,65 @@ a UTF-8 check followed by one copy reads each byte twice and is still O(n)).
 5. Trusted rust fn with `u64` or `[u16]`: `parse/small_int_unsupported` (tests/spec/r6p_6_host_reject_foreign,
    r6p_6_host_reject_foreign_u16, tests/must_reject/p3_pub_u64).
 
+## P12b Rust module tuples, consts and aliases
+
+Paths are the existing absolute item paths (`crate::m::NAME`, `crate::m::Alias<..>`); inside its own module an item is
+used by its bare name.
+
+- Constants. `const` and `pub const` are allowed in every file of a module program. A constant belongs to its declaring
+  module and is evaluated there (its initializer names only constants of the same file). `crate::m::NAME` reads that
+  module's constant; a non-`pub` one read from another module is `private_item`. Same-named constants of two modules
+  are different items and do not collide in the generated Rust. Cost: 0 at run time (the value is a literal).
+- Aliases. `type` and `pub type` are allowed in every file. The right side is resolved in the declaring module, so a
+  bare name in it means the declaring module's item wherever the alias is used. `crate::m::Alias<..>` expands to the
+  right side with the arguments substituted; a non-`pub` alias used from another module is `private_item`. Public
+  aliases are expanded before the public-interface checks: a `pub type` or a `pub fn` signature that reaches a private
+  type through an alias is `public_interface`. A cycle through module paths is `type/alias_cycle`. Cost: 0 (aliases
+  are transparent and print expanded).
+- Tuples. Tuple identity is the list of resolved component types: `(Pair, i64)` in module `a` and
+  `(crate::a::Pair, i64)` in module `b` are one type, two modules' own `Pair` give two types. The Rust backend keeps
+  native Rust tuples, so a root host entry `-> (i64, u8)` is that Rust tuple. Cost: a tuple crosses by value, linear in
+  its component size, O(1) for fixed scalars; no conversion.
+- LLVM. A root host signature with a tuple has no C layout until P12e and fails in LLVM codegen; tuples inside a module
+  program on LLVM follow the single-file rules (owned components stay `codegen/tuple_llvm_owned`).
+
+## P12c Rust owned collections and state (design)
+
+| Pruv position | Generated Rust public signature |
+|---|---|
+| read `v: Vec<T>`, `T` = `i64`, `bool` or an eligible public struct | `v: &Vec<T>` |
+| `take v: Vec<T>` / owned result `-> Vec<T>`, same `T` | `v: Vec<T>` / `-> Vec<T>` |
+| `inout v: Vec<T>` | stays `type/entry_signature` at a host entry |
+| `Vec<N>` for a non-`i64` integer `N` | no public signature (P11 type-argument limit; `[u8]`/`[u16]` are array types) |
+| `Vec<Vec<T>>` | no public signature (`type/foreign_owned_type`) |
+| read `s: String` / `take s: String` / `-> String` | `s: &String` / `s: String` / `-> String` |
+| read `s: str` / owned result `-> str` | `s: &str` / `-> String`; `take s: str` and `inout` strings stay unavailable |
+| first parameter `inout st: State`, public non-generic struct | `st: &mut State`, updated in place |
+
+- Representation. The wrapper and body use the same Rust types: a public `&[T]` cannot feed the body's `&Vec<T>`, and
+  `&str` cannot feed `&String`, without building an owner. Native read signatures avoid a host shim.
+- What is lifted. Direct vector inputs (read and `take`) today hit `type/entry_signature`; lift those. Lift the result
+  rejection for a vector of an otherwise admissible public struct, and the ordinary read `String` and owned `String`
+  result. First-position `&mut State` already passes; the position rule and scalar `inout` rejection stay.
+- Element eligibility. The existing element checks run first. Host-built state with an effective invariant, and vector
+  inputs whose elements carry one, stay `type/entry_signature` (no runtime invariant checker in P12c). These entries stay
+  unavailable to LLVM, standalone C bindings and `raw_entries="c"` (`codegen/unsupported_type`).
+- Wrapper order. Validate the host representation, then evaluate `requires` against borrowed inputs, then call the body.
+  Every reachable host-built buffer (vector elements, UTF-8 bytes, fields of state and of each vector element) is
+  checked against the `2^40` length bound before any contract runs or state changes. `--trust-callers` may skip
+  `requires` but keeps the representation checks.
+- Ownership. A `take` argument is owned by the wrapper, borrowed for the checks, then moved once into the body; on a check
+  panic it is dropped by unwinding. The original allocation is forwarded, never copied.
+- Acceptance tests (R-6p-8, verified and `--no-verify`, Rust caller): empty `Vec<i64>`/`Vec<bool>`/`String`/`str`;
+  UTF-8 `é🦀` through `&String` and `&str` (six bytes) and a taken `String` returned with the same allocation; a vector
+  of public records with owned byte fields round-tripped with allocation identity; a counted drop of a taken allocation
+  on consumption, on a caught `requires` failure and after the caller drops a result; `&mut State` mutation and an
+  unchanged state after a false `requires`; rejections for invariant-bearing state and vectors, vector `inout`,
+  non-first state, `Vec<u16>`, `Vec<Vec<i64>>`, and LLVM/raw C entries.
+- Cost. Descriptor handoff O(1); 0 bytes copied into separate storage; the boundary pass is O(1) for flat scalar vectors
+  and strings and O(n) worst case over nested elements visited for the length bound. Contracts, body work and copies the
+  caller asks for are counted separately.
+
 ## Next bundle
 
-P12b (Rust module tuples, consts, aliases), then P12c, then the LLVM families P12d to P12g, then P12h.
+P12c (Rust owned collections and state), then the LLVM families P12d to P12g, then P12h.
