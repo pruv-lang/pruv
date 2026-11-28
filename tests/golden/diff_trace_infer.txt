@@ -628,7 +628,7 @@ must_reject|tests/must_reject/g2a_param_store.pruv	1 case: obl=0 1	--infer=7053c
 must_reject|tests/must_reject/g2a_refine_wide.pruv	1 case: obl=0 1	--infer=fa965116965b
 must_reject|tests/must_reject/g2a_refined_store.pruv	1 case: obl=8 1	--infer=0c7d32de90f3
 must_reject|tests/must_reject/g2a_return_mismatch.pruv	1 case: obl=0 1	--infer=e3bde32572b3
-must_reject|tests/must_reject/g2a_scalar_i32.pruv	1 case: obl=0 1	--infer=eaf6fe1e6a41
+must_reject|tests/must_reject/g2a_scalar_i32.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 must_reject|tests/must_reject/g2a_scalar_u8.pruv	1 case: obl=0 1	--infer=1bea30afc382
 must_reject|tests/must_reject/g2a_store_index.pruv	1 case: obl=4 1	--infer=104b5f961121
 must_reject|tests/must_reject/g2a_store_then_read.pruv	1 case: obl=7 1	--infer=5bb5eb72b0da
@@ -1319,7 +1319,7 @@ must_reject|tests/must_reject/p1_literal_range.pruv	1 case: obl=0 1	--infer=d350
 must_reject|tests/must_reject/p1_mixed_width.pruv	1 case: obl=0 1	--infer=90cdbb34a4d1
 must_reject|tests/must_reject/p1_neg.pruv	1 case: obl=0 1	--infer=d239c45df678
 must_reject|tests/must_reject/p1_par_cast.pruv	1 case: obl=0 1	--infer=4f275608f03f
-must_reject|tests/must_reject/p1_pub_sig.pruv	1 case: obl=0 1	--infer=826802f1543a
+must_reject|tests/must_reject/p1_pub_sig.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 must_reject|tests/must_reject/p1_sub_underflow.pruv	1 case: obl=1 1	--infer=aa63ddc86c33
 must_reject|tests/must_reject/p1_u32.pruv	1 case: obl=0 1	--infer=670fe87850cd
 must_reject|tests/must_reject/p2_bits_arity.pruv	1 case: obl=0 1	--infer=1e43d4ddf6af
@@ -1335,7 +1335,7 @@ must_reject|tests/must_reject/p2_u16_fill_range.pruv	1 case: obl=2 1	--infer=f37
 must_reject|tests/must_reject/p2_u16_find.pruv	1 case: obl=0 1	--infer=499c026cdb72
 must_reject|tests/must_reject/p2_u16_index.pruv	1 case: obl=1 1	--infer=886be86015be
 must_reject|tests/must_reject/p2_u16_mixed_append.pruv	1 case: obl=0 1	--infer=027761f7a848
-must_reject|tests/must_reject/p2_u16_pub_sig.pruv	1 case: obl=0 1	--infer=6d21cb3025b3
+must_reject|tests/must_reject/p2_u16_pub_sig.pruv	1 case: obl=0 1	--infer=a887fdcb74d6
 must_reject|tests/must_reject/p2_u16_store_range.pruv	1 case: obl=2 1	--infer=4e519318c8d0
 must_reject|tests/must_reject/p2_u16_vec.pruv	1 case: obl=0 1	--infer=fe85745d9f64
 must_reject|tests/must_reject/p2_word_index.pruv	1 case: obl=1 1	--infer=e5784b79be48
@@ -1363,7 +1363,7 @@ must_reject|tests/must_reject/p3_lit_u64.pruv	1 case: obl=0 1	--infer=6429540012
 must_reject|tests/must_reject/p3_mix.pruv	1 case: obl=0 1	--infer=2c2ac0faf9cd
 must_reject|tests/must_reject/p3_mul_i8.pruv	1 case: obl=1 1	--infer=5a7012b43567
 must_reject|tests/must_reject/p3_neg_i32.pruv	1 case: obl=0 1	--infer=56019bc2bb46
-must_reject|tests/must_reject/p3_pub_u64.pruv	1 case: obl=0 1	--infer=e33d8d00688d
+must_reject|tests/must_reject/p3_pub_u64.pruv	1 case: obl=0 1	--infer=4e58c620012c
 must_reject|tests/must_reject/p3_sub_i16.pruv	1 case: obl=1 1	--infer=aa1b90b450d6
 must_reject|tests/must_reject/p3_sub_u64.pruv	1 case: obl=1 1	--infer=e0a143dc8f51
 must_reject|tests/must_reject/p3_vec_idx.pruv	1 case: obl=0 1	--infer=7ca9dc1436fa

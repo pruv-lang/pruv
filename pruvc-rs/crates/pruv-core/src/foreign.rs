@@ -742,7 +742,7 @@ pub fn check_foreign_decl(f: &Function, externs: &[String]) -> Res<()> {
             fl,
             fc,
             "small_int_unsupported",
-            crate::emit_common::SMALL_INT_HOST_MESSAGE,
+            "non-i64 integers in foreign signatures require P12",
             "use i64 in the host signature",
         ));
     }

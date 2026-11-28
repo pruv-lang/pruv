@@ -1765,7 +1765,7 @@ impl<'a> Gen<'a> {
                     && f.foreign.is_none()
                     && f.requires.is_empty()
                     && !len_params(f, g.entries.contains(&f.name)).is_empty()
-                    && (if g.explicit { g.entries.contains(&f.name) } else { !g.private(f) })
+                    && (if g.explicit { g.entries.contains(&f.name) } else { !g.legacy_private(f) })
             })
             .map(|f| f.name.clone())
             .collect();
@@ -1973,8 +1973,8 @@ impl<'a> Gen<'a> {
     }
 
     /// G3 specializations, G6 collection-bearing functions and (G9) functions with an extended type in their signature
-    /// are private Rust items (this includes their checked entry wrappers)
-    fn private(&self, f: &Function) -> bool {
+    /// are private Rust items in legacy mode (including their checked entry wrappers).
+    fn legacy_private(&self, f: &Function) -> bool {
         is_spec_fn(&f.name)
             || crate::emit_common::has_u16_buffer_sig(f)
             || crate::emit_common::has_narrow_scalar_sig(f, &self.table)
@@ -2303,7 +2303,7 @@ impl<'a> Gen<'a> {
             } else {
                 ""
             }
-        } else if named || self.private(f) {
+        } else if named || self.legacy_private(f) {
             ""
         } else {
             "pub "
@@ -2541,7 +2541,7 @@ impl<'a> Gen<'a> {
         checked: Option<bool>,
     ) -> R<()> {
         let name = name.unwrap_or(f.name.as_str());
-        let is_pub = is_pub.unwrap_or_else(|| !self.private(f));
+        let is_pub = is_pub.unwrap_or_else(|| !self.legacy_private(f));
         let checked = checked.unwrap_or(!self.trust);
         let allow = self.allow;
         self.emit(0, allow);
@@ -6870,26 +6870,6 @@ fn gen_rust_concrete_core(
     if let Some(e) = crate::typeinfo::g2_unimplemented_error(prog, "codegen", None, &["array_u8", "array_u16", "array_bool", "str"], None) { // G2 B2
         return Err(GenError::Msg(format!("unsupported_type: {}", e.message)));
     }
-    // Built only when a host-facing function exists (the generator builds its own table later).
-    let mut tt0 = None;
-    // P9b-2: a method is never a host entry (R-6x-5), so its signature is not a host boundary
-    let methods: std::collections::HashSet<&str> = prog.methods.iter().map(|m| m.func.as_str()).collect();
-    for (i, f) in prog.functions.iter().enumerate() {
-        let mark = prog.explicit.as_ref().and_then(|meta| meta.fns.get(i));
-        let public = mark.is_some_and(|mark| mark.is_pub || mark.host_entry) && !methods.contains(f.name.as_str());
-        // L-gaps 20: a module `pub` function (not a host entry) may pass `[T; N]` by value
-        let host = f.foreign.is_some() || mark.is_some_and(|mark| mark.host_entry) || prog.explicit.is_none();
-        if (public || f.foreign.is_some()) && {
-            let table = tt0.get_or_insert_with(|| make_type_table(prog));
-            if host {
-                crate::emit_common::has_narrow_scalar_sig(f, table)
-            } else {
-                crate::emit_common::has_narrow_scalar_sig_module(f, table)
-            }
-        } {
-            return Err(GenError::Msg(crate::emit_common::SMALL_INT_HOST_ERROR.into()));
-        }
-    }
     if prog.raw_entries.as_deref() == Some("c") {
         if let Some(e) = crate::bindings::struct_inout_abi_error(prog, true, None) {
             return Err(GenError::Diag(e));
@@ -8015,7 +7995,7 @@ mod tests {
         let mut invalid = p;
         invalid.explicit.as_mut().unwrap().fns[0].host_entry = true;
         let err = crate::emit_common::SMALL_INT_HOST_ERROR;
-        assert_eq!(gen_rust_concrete(&invalid, false, false, 100).unwrap_err(), err);
+        assert!(gen_rust_concrete(&invalid, false, false, 100).unwrap().contains("pub fn narrow("));
         assert_eq!(crate::llvmgen::gen_llvm_concrete(&invalid, false, false, 100, AbiTarget::SysV).unwrap_err(), err);
         assert_eq!(crate::bindings::gen_bindings(&invalid).unwrap_err(), err);
     }

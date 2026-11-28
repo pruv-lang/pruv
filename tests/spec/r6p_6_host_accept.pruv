@@ -43,3 +43,23 @@ pub fn negate(x: i32) -> i32
 {
   return 0 - x;
 }
+
+// a contract on u64 is lifted to i128 directly: u64::MAX passes `x > 0`
+pub fn keep_big(x: u64) -> u64
+  requires x > 0
+{
+  return x;
+}
+
+pub fn small(a: i8, b: i16) -> i16
+  requires i64(b) <= 32639 && i64(b) >= -32640
+{
+  return i16(a) + b;
+}
+
+pub struct Pair { lo: u8, hi: u16 }
+
+pub fn pair_sum(p: Pair) -> u32
+{
+  return u32(p.lo) + u32(p.hi);
+}

@@ -790,7 +790,7 @@ must_reject|tests/must_reject/g2a_param_store.pruv	1 case: error type/immutable 
 must_reject|tests/must_reject/g2a_refine_wide.pruv	1 case: error type/refinement_bounds 1	check=c95a0a6997fb
 must_reject|tests/must_reject/g2a_refined_store.pruv	1 case: ok 1	check=db416b8e139c
 must_reject|tests/must_reject/g2a_return_mismatch.pruv	1 case: error type/type_mismatch 1	check=8d1eaf9c2420
-must_reject|tests/must_reject/g2a_scalar_i32.pruv	1 case: error parse/small_int_unsupported 1	check=c9fc983c268f
+must_reject|tests/must_reject/g2a_scalar_i32.pruv	1 case: ok 1	check=165d64cd3d19
 must_reject|tests/must_reject/g2a_scalar_u8.pruv	1 case: error parse/element_storage_type 1	check=65f8b1e90b7c
 must_reject|tests/must_reject/g2a_store_index.pruv	1 case: ok 1	check=0a05f4fe7613
 must_reject|tests/must_reject/g2a_store_then_read.pruv	1 case: ok 1	check=afb974e26c9c
@@ -1481,7 +1481,7 @@ must_reject|tests/must_reject/p1_literal_range.pruv	1 case: error type/int_range
 must_reject|tests/must_reject/p1_mixed_width.pruv	1 case: error type/type_mismatch 1	check=5170c16755aa
 must_reject|tests/must_reject/p1_neg.pruv	1 case: error type/small_int_op 1	check=0d1d11cebfdc
 must_reject|tests/must_reject/p1_par_cast.pruv	1 case: error type/parallel_call 1	check=d7ff26f07d76
-must_reject|tests/must_reject/p1_pub_sig.pruv	1 case: error parse/small_int_unsupported 1	check=a10e56786a20
+must_reject|tests/must_reject/p1_pub_sig.pruv	1 case: ok 1	check=39658f7039b0
 must_reject|tests/must_reject/p1_sub_underflow.pruv	1 case: ok 1	check=66ea416cd57c
 must_reject|tests/must_reject/p1_u16_array.pruv	1 case: error parse/small_int_unsupported 1	check=9ab5020447e4
 must_reject|tests/must_reject/p1_u32.pruv	1 case: error parse/small_int_unsupported 1	check=b4324d1ad04a
@@ -1498,7 +1498,7 @@ must_reject|tests/must_reject/p2_u16_fill_range.pruv	1 case: ok 1	check=760a9d61
 must_reject|tests/must_reject/p2_u16_find.pruv	1 case: error type/type_mismatch 1	check=01f26e6d9e61
 must_reject|tests/must_reject/p2_u16_index.pruv	1 case: ok 1	check=499a4d8eb9ab
 must_reject|tests/must_reject/p2_u16_mixed_append.pruv	1 case: error type/type_mismatch 1	check=6d3d80809ebd
-must_reject|tests/must_reject/p2_u16_pub_sig.pruv	1 case: error parse/small_int_unsupported 1	check=ad49e56b7df4
+must_reject|tests/must_reject/p2_u16_pub_sig.pruv	1 case: ok 1	check=2e8bb768902c
 must_reject|tests/must_reject/p2_u16_store_range.pruv	1 case: ok 1	check=65ce154120fa
 must_reject|tests/must_reject/p2_u16_vec.pruv	1 case: error parse/small_int_unsupported 1	check=777241ab73c2
 must_reject|tests/must_reject/p2_word_index.pruv	1 case: ok 1	check=0aae0b18cd09
@@ -1526,7 +1526,7 @@ must_reject|tests/must_reject/p3_lit_u64.pruv	1 case: error type/int_range 1	che
 must_reject|tests/must_reject/p3_mix.pruv	1 case: error type/type_mismatch 1	check=03bfffe15561
 must_reject|tests/must_reject/p3_mul_i8.pruv	1 case: ok 1	check=669d49f693b1
 must_reject|tests/must_reject/p3_neg_i32.pruv	1 case: error type/small_int_op 1	check=6083a68fda52
-must_reject|tests/must_reject/p3_pub_u64.pruv	1 case: error parse/small_int_unsupported 1	check=1c7dea7a0714
+must_reject|tests/must_reject/p3_pub_u64.pruv	1 case: error parse/small_int_unsupported 1	check=72c780e26f7b
 must_reject|tests/must_reject/p3_sub_i16.pruv	1 case: ok 1	check=5a26521006f4
 must_reject|tests/must_reject/p3_sub_u64.pruv	1 case: ok 1	check=57a824469056
 must_reject|tests/must_reject/p3_vec_idx.pruv	1 case: error type/small_int_unsupported 1	check=e484b26b2ed7
@@ -2508,7 +2508,7 @@ mutate|tests/must_reject/g2a_param_store.pruv	6 cases: error parse/syntax 5, err
 mutate|tests/must_reject/g2a_refine_wide.pruv	6 cases: error parse/syntax 5, error parse/reserved_name 1	0/check=2d0f74185679	1/check=eaac4a0810ec	2/check=07350338e598	3/check=2bada9fb3a8b	4/check=cc0546aa2e41	5/check=ac0dd95ee0e7
 mutate|tests/must_reject/g2a_refined_store.pruv	6 cases: error parse/syntax 2, ok 2, error parse/refinement_syntax 1, error pars	0/check=1790a9eea5e6	1/check=1ec280179864	2/check=3c4751fef204	3/check=db416b8e139c	4/check=db416b8e139c	5/check=654d89c3c8dc
 mutate|tests/must_reject/g2a_return_mismatch.pruv	6 cases: error parse/syntax 6	0/check=74ed71680f6b	1/check=01b0040efe6c	2/check=41c9384143bd	3/check=6f59ca9c0cad	4/check=e89fda3e14ce	5/check=0faf78ba3cbd
-mutate|tests/must_reject/g2a_scalar_i32.pruv	6 cases: error parse/small_int_unsupported 3, error parse/syntax 3	0/check=51a8a637056c	1/check=f225800b7322	2/check=253cd8fdc86a	3/check=2e5783030d97	4/check=1a52687e523d	5/check=2d27fecda943
+mutate|tests/must_reject/g2a_scalar_i32.pruv	6 cases: error parse/syntax 6	0/check=7b6326d730e7	1/check=f225800b7322	2/check=61930a0b4a0d	3/check=b082e0a4f127	4/check=1a52687e523d	5/check=2d27fecda943
 mutate|tests/must_reject/g2a_scalar_u8.pruv	6 cases: error parse/element_storage_type 5, error parse/syntax 1	0/check=65f8b1e90b7c	1/check=65f8b1e90b7c	2/check=65f8b1e90b7c	3/check=a634b659d80d	4/check=65f8b1e90b7c	5/check=65f8b1e90b7c
 mutate|tests/must_reject/g2a_store_index.pruv	6 cases: error parse/syntax 6	0/check=69c3c730945b	1/check=3824ef733209	2/check=2106c586d789	3/check=97c745e8adff	4/check=885e4f62109a	5/check=a87cfc2b8e03
 mutate|tests/must_reject/g2a_store_then_read.pruv	6 cases: error parse/syntax 5, error parse/bad_char 1	0/check=e6cbf01c8c13	1/check=cc5c600687c1	2/check=7631300edbae	3/check=5e6c07ae6e31	4/check=febd9d0703bd	5/check=eb45666de5cb
@@ -3225,7 +3225,7 @@ mutate|tests/must_reject/p1_literal_range.pruv	6 cases: error parse/syntax 5, er
 mutate|tests/must_reject/p1_mixed_width.pruv	6 cases: error parse/syntax 2, error type/type_mismatch 2, ok 2	0/check=fd914019f86a	1/check=a1c35fa72a41	2/check=a0179efd7e52	3/check=5170c16755aa	4/check=fd914019f86a	5/check=5170c16755aa
 mutate|tests/must_reject/p1_neg.pruv	6 cases: ok 3, error type/small_int_op 2, error parse/syntax 1	0/check=fd914019f86a	1/check=fd914019f86a	2/check=dd9a2955165b	3/check=0d1d11cebfdc	4/check=fd914019f86a	5/check=0d1d11cebfdc
 mutate|tests/must_reject/p1_par_cast.pruv	6 cases: error parse/syntax 3, error parse/parallel_syntax 1, error parse/reserv	0/check=d2d567f56b4f	1/check=3dc98e658dc8	2/check=98ed7d07e1dd	3/check=9a69b2510f8c	4/check=1ef030b38523	5/check=845c9376530c
-mutate|tests/must_reject/p1_pub_sig.pruv	6 cases: error parse/small_int_unsupported 5, error parse/reserved_name 1	0/check=b8faf9790984	1/check=3f0a87215eaa	2/check=148e4a6d859b	3/check=54399c423b02	4/check=d9b56db526b4	5/check=d035f7397abb
+mutate|tests/must_reject/p1_pub_sig.pruv	6 cases: ok 4, error parse/syntax 2	0/check=dddbd4f44827	1/check=9437a4c5c41c	2/check=fb886e1512f4	3/check=28c1ac23eb8b	4/check=a06c65d7eab4	5/check=c26d00a15fb7
 mutate|tests/must_reject/p1_sub_underflow.pruv	6 cases: error parse/syntax 5, ok 1	0/check=26ecc0aab97a	1/check=66ea416cd57c	2/check=474f88b78176	3/check=cf0fbbc3cb59	4/check=32568da2f3e3	5/check=8a7a0c03344d
 mutate|tests/must_reject/p1_u16_array.pruv	6 cases: error parse/small_int_unsupported 4, error parse/syntax 1, ok 1	0/check=9ab5020447e4	1/check=9ab5020447e4	2/check=9ab5020447e4	3/check=fd914019f86a	4/check=9ab5020447e4	5/check=c73709b1fcf8
 mutate|tests/must_reject/p1_u32.pruv	6 cases: error parse/small_int_unsupported 4, error parse/syntax 1, ok 1	0/check=b4324d1ad04a	1/check=08baf5e55b4c	2/check=6292c3d3d3bc	3/check=b4324d1ad04a	4/check=b4324d1ad04a	5/check=fd914019f86a
@@ -3242,7 +3242,7 @@ mutate|tests/must_reject/p2_u16_fill_range.pruv	6 cases: error parse/syntax 3, o
 mutate|tests/must_reject/p2_u16_find.pruv	6 cases: error parse/syntax 4, error type/type_mismatch 1, error type/unknown_fn	0/check=01f26e6d9e61	1/check=70e345b876f5	2/check=1277f4fb7bc9	3/check=c6595cd6b617	4/check=2305e65b4c1f	5/check=f220cdbf8413
 mutate|tests/must_reject/p2_u16_index.pruv	6 cases: error parse/syntax 4, ok 2	0/check=620dc9c7d6b0	1/check=499a4d8eb9ab	2/check=deb2a01ba3cc	3/check=deb2a01ba3cc	4/check=d97570086880	5/check=499a4d8eb9ab
 mutate|tests/must_reject/p2_u16_mixed_append.pruv	6 cases: error parse/syntax 4, error parse/reserved_name 1, error type/type_mism	0/check=41d54d144b0d	1/check=85ef5260ecd2	2/check=6d3d80809ebd	3/check=74c86233f5fe	4/check=e9e324307659	5/check=a91c6a398295
-mutate|tests/must_reject/p2_u16_pub_sig.pruv	6 cases: error parse/small_int_unsupported 3, error parse/syntax 3	0/check=ae7c36782a9a	1/check=d23ede0912b2	2/check=6f3512a2f6da	3/check=337bd912f32b	4/check=95a15d52703e	5/check=f6f04e0c53c8
+mutate|tests/must_reject/p2_u16_pub_sig.pruv	6 cases: error parse/syntax 3, ok 3	0/check=d9bdd345b96c	1/check=ca337d2a2a08	2/check=37262b8cdb33	3/check=10201196bbbf	4/check=85a8ebe5a24c	5/check=10cfc5b7e116
 mutate|tests/must_reject/p2_u16_store_range.pruv	6 cases: error parse/syntax 5, ok 1	0/check=4c7a4d1686ff	1/check=a5bf62d289c5	2/check=3484fd34d545	3/check=65ce154120fa	4/check=deb2a01ba3cc	5/check=05e39442728d
 mutate|tests/must_reject/p2_u16_vec.pruv	6 cases: error parse/small_int_unsupported 4, error parse/reserved_name 1, error	0/check=777241ab73c2	1/check=c768670c5c57	2/check=777241ab73c2	3/check=777241ab73c2	4/check=3103d1f6060e	5/check=777241ab73c2
 mutate|tests/must_reject/p2_word_index.pruv	6 cases: error parse/syntax 3, ok 3	0/check=d0e0cea98e05	1/check=c3555e1980be	2/check=6836e0a64fe0	3/check=0aae0b18cd09	4/check=0aae0b18cd09	5/check=0aae0b18cd09
@@ -3270,7 +3270,7 @@ mutate|tests/must_reject/p3_lit_u64.pruv	6 cases: error type/int_range 4, error 
 mutate|tests/must_reject/p3_mix.pruv	6 cases: error parse/syntax 3, error type/type_mismatch 2, error type/unknown_ty	0/check=966cb1ca2077	1/check=6beddba54ac6	2/check=03bfffe15561	3/check=662c8fea9efe	4/check=86718b71ee03	5/check=03bfffe15561
 mutate|tests/must_reject/p3_mul_i8.pruv	6 cases: error parse/syntax 5, error type/unknown_name 1	0/check=0ac6c83c4409	1/check=39ac21954ee6	2/check=1bdb84caa5ec	3/check=79351f6e4cc6	4/check=eddb5c202e25	5/check=f05bb86512c7
 mutate|tests/must_reject/p3_neg_i32.pruv	6 cases: error parse/syntax 4, error type/small_int_op 2	0/check=6083a68fda52	1/check=fbc9fd70ce36	2/check=c3f4695d1ab7	3/check=581ea678e56b	4/check=73cf4ffb3caa	5/check=6083a68fda52
-mutate|tests/must_reject/p3_pub_u64.pruv	6 cases: error parse/small_int_unsupported 3, error parse/bad_char 1, error pars	0/check=a56c87b9961d	1/check=fd914019f86a	2/check=148649e7fa88	3/check=39a62bf8e5e8	4/check=4c7252446209	5/check=3784e31161af
+mutate|tests/must_reject/p3_pub_u64.pruv	6 cases: error parse/small_int_unsupported 4, error parse/bad_char 1, ok 1	0/check=72c780e26f7b	1/check=fd914019f86a	2/check=72c780e26f7b	3/check=c73908b6d955	4/check=72c780e26f7b	5/check=72c780e26f7b
 mutate|tests/must_reject/p3_sub_i16.pruv	6 cases: error parse/syntax 4, ok 2	0/check=32568da2f3e3	1/check=5a26521006f4	2/check=4c2267a5e382	3/check=b7c940275024	4/check=0aab87bc0632	5/check=95fb016b2b32
 mutate|tests/must_reject/p3_sub_u64.pruv	6 cases: error parse/syntax 6	0/check=dce94824fbb6	1/check=ba2b0418d596	2/check=db75be7429e9	3/check=e5c437f1599e	4/check=a9b8338d0cb1	5/check=4291940f8f4c
 mutate|tests/must_reject/p3_vec_idx.pruv	6 cases: error parse/syntax 3, error parse/bad_char 1, error type/small_int_unsu	0/check=a2553d6d7419	1/check=cea517eec051	2/check=fb73271047f7	3/check=e484b26b2ed7	4/check=fa46fb620f12	5/check=fff981eb369e

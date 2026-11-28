@@ -522,6 +522,11 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
         Some(x) => x.fns.iter().map(|mk| mk.host_entry).collect(),
         None => Vec::new(),
     };
+    if prog.functions.iter().zip(&hosts).any(|(f, &host)| {
+        host && f.foreign.is_none() && crate::emit_common::has_llvm_unsupported_int_sig(f, &tt, false)
+    }) {
+        return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
+    }
     let pubs: Vec<&Function> = prog
         .functions
         .iter()
@@ -545,9 +550,6 @@ pub fn gen_bindings_with(prog: &Program, shim: Option<&str>, verified: bool) -> 
     let returns_array = pubs.iter().any(|f| is_array_name(&f.ret) || f.ret == "str"); // G2 B2: str returns are counted too
     let mut decls: Vec<String> = Vec::new();
     for f in &pubs {
-        if crate::emit_common::has_narrow_scalar_sig(f, &tt) {
-            return Err(crate::emit_common::SMALL_INT_HOST_ERROR.into());
-        }
         if needs_mangling(&f.name) {
             return Err(format!(
                 "llvmgen: function name {} needs mangling; the bindings use the raw name",

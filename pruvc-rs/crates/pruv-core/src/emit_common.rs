@@ -64,20 +64,23 @@ pub fn is_user_key(t: &str) -> bool {
     !is_g3_key(t) && !crate::intwidth::is_narrow(t) && is_user_type(t)
 }
 
-pub(crate) const SMALL_INT_HOST_MESSAGE: &str = "integer types other than i64 at the host boundary is bundle P12";
-pub(crate) const SMALL_INT_HOST_ERROR: &str = "small_int_unsupported: integer types other than i64 at the host boundary is bundle P12";
+pub(crate) const SMALL_INT_HOST_MESSAGE: &str = "integer types other than i64 and [u16] at the LLVM host boundary are a later P12 bundle (the Rust backend has them since P12a)";
+pub(crate) const SMALL_INT_HOST_ERROR: &str = "small_int_unsupported: integer types other than i64 and [u16] at the LLVM host boundary are a later P12 bundle (the Rust backend has them since P12a)";
 
-/// A u8/u16 value or a fixed-length array in the signature, directly or inside a user struct/enum (P1: such functions stay off the host boundary).
-pub(crate) fn has_narrow_scalar_sig(f: &crate::ast::Function, tt: &TypeTable) -> bool {
-    let mut seen = std::collections::HashSet::new();
-    has_narrow(tt, &f.ret, &mut seen, false) || f.params.iter().any(|p| has_narrow(tt, &p.ty, &mut seen, false))
+/// A narrow integer or fixed-length array, directly in the signature or inside a nominal type.
+pub(crate) fn has_narrow_scalar_sig(f: &Function, tt: &TypeTable) -> bool {
+    has_int_sig(f, tt, false, false)
 }
 
-/// L-gaps 20 (4.4c-IS): `has_narrow_scalar_sig` for a module `pub` function that is not a host entry: a `[T; N]`
-/// (with its narrow element) is passed by value between Pruv modules and is not a narrow host scalar there.
-pub(crate) fn has_narrow_scalar_sig_module(f: &crate::ast::Function, tt: &TypeTable) -> bool {
+/// LLVM also excludes u16 buffers. A module pub function that is not a host entry may pass fixed arrays by value.
+pub(crate) fn has_llvm_unsupported_int_sig(f: &Function, tt: &TypeTable, skip_fixed: bool) -> bool {
+    has_int_sig(f, tt, skip_fixed, true)
+}
+
+fn has_int_sig(f: &Function, tt: &TypeTable, skip_fixed: bool, include_u16_buffers: bool) -> bool {
     let mut seen = std::collections::HashSet::new();
-    has_narrow(tt, &f.ret, &mut seen, true) || f.params.iter().any(|p| has_narrow(tt, &p.ty, &mut seen, true))
+    std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty))
+        .any(|ty| has_narrow(tt, ty, &mut seen, skip_fixed, include_u16_buffers))
 }
 
 /// `key` without its `@fixed:N<elem>` parts (the element of a fixed array is a scalar, so `<..>` holds no `<`).
@@ -101,15 +104,16 @@ fn strip_fixed(key: &str) -> std::borrow::Cow<'_, str> {
 
 /// Every type name in a key (`option<Byte>` reaches `Byte`), each user type visited once. `skip_fixed` ignores
 /// fixed-length arrays and their elements.
-fn has_narrow(tt: &TypeTable, ty: &str, seen: &mut std::collections::HashSet<String>, skip_fixed: bool) -> bool {
+fn has_narrow(tt: &TypeTable, ty: &str, seen: &mut std::collections::HashSet<String>, skip_fixed: bool, include_u16_buffers: bool) -> bool {
     let ty = if skip_fixed { strip_fixed(ty) } else { std::borrow::Cow::Borrowed(ty) };
     ty.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.' || c == ':'))
         .filter(|n| !n.is_empty())
         .any(|n| {
             crate::intwidth::is_narrow(n)
+                || (include_u16_buffers && n == "array_u16")
                 || n.starts_with(&crate::gtype::FIXED_PREFIX[1..]) // P7-1: `[T; N]` stays off the host boundary too
                 || (seen.insert(n.to_string())
-                    && tt.decl(n).is_some_and(|d| d.all_fields().iter().any(|x| has_narrow(tt, &x.ty, seen, skip_fixed))))
+                    && tt.decl(n).is_some_and(|d| d.all_fields().iter().any(|x| has_narrow(tt, &x.ty, seen, skip_fixed, include_u16_buffers))))
         })
 }
 

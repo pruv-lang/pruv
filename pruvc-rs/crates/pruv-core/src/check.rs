@@ -452,10 +452,8 @@ struct Checker {
     fixed_borrow: bool,
 }
 
-/// Reject [u16] and fixed-length arrays at explicit boundaries even when a struct or enum hides them. `[u16]` is
-/// rejected in every `pub` signature (`public`); a fixed-length array only where a host or foreign ABI carries it
-/// (`host`: root host entries), so module `pub` functions pass `[T; N]` by value (L-gaps 20, 4.4c-IS).
-fn check_u16_boundary(prog: &Program, public: impl Fn(usize) -> bool, host: impl Fn(usize) -> bool) -> Res<()> {
+/// Reject foreign u16 buffers and host or foreign fixed-length arrays, including in nested types.
+fn check_u16_boundary(prog: &Program, host: impl Fn(usize) -> bool) -> Res<()> {
     fn contains(ty: &GType, decls: &HashMap<&str, &TypeDecl>, seen: &mut HashSet<String>, hit: fn(&GType) -> bool) -> bool {
         hit(ty)
             || ty.args.iter().any(|arg| contains(arg, decls, seen, hit))
@@ -467,20 +465,20 @@ fn check_u16_boundary(prog: &Program, public: impl Fn(usize) -> bool, host: impl
 
     let decls = prog.types.iter().map(|d| (d.name(), d)).collect();
     for (i, f) in prog.functions.iter().enumerate() {
-        if f.foreign.is_none() && !public(i) {
+        if f.foreign.is_none() && !host(i) {
             continue;
         }
         let sig = || std::iter::once(&f.ret).chain(f.params.iter().map(|p| &p.ty));
         let mut seen = HashSet::new();
-        if sig().any(|ty| contains(&GType::from_key(ty), &decls, &mut seen, |t| t.name == "array_u16")) {
+        if f.foreign.is_some()
+            && sig().any(|ty| contains(&GType::from_key(ty), &decls, &mut seen, |t| t.name == "array_u16"))
+        {
             return Err(small_int_unsupported(
-                f.line, f.col, "[u16] at the host boundary is bundle P12", "use a host-supported type",
+                f.line, f.col, "[u16] in foreign signatures requires P12", "use a host-supported type",
             ));
         }
         let mut seen = HashSet::new();
-        if (f.foreign.is_some() || host(i))
-            && sig().any(|ty| contains(&GType::from_key(ty), &decls, &mut seen, GType::is_fixed))
-        {
+        if sig().any(|ty| contains(&GType::from_key(ty), &decls, &mut seen, GType::is_fixed)) {
             // P7-1: no host or foreign ABI carries [T; N] (directly or inside a struct field)
             return Err(terr(f.line, f.col, "fixed_array_position",
                 format!("{} has a fixed-length array in its signature, which a host entry or trusted rust fn cannot have", f.name),
@@ -506,7 +504,6 @@ pub fn check_explicit(
     let not_method = |i: usize| !methods.contains(prog.functions[i].name.as_str());
     check_u16_boundary(
         prog,
-        |i| g4.fn_meta.get(i).is_some_and(|m| m.is_pub || m.host_entry) && not_method(i),
         |i| g4.fn_meta.get(i).is_some_and(|m| m.host_entry) && not_method(i),
     )?;
     let src_names: Vec<String> = g4.fn_meta.iter().map(|m| m.src_name.clone()).collect();
@@ -538,7 +535,7 @@ pub fn check_with_externs(prog: &mut Program, externs: &[String]) -> Result<Type
         prog.explicit.as_ref().and_then(|e| e.fns.get(i)).is_some_and(|m| m.is_pub || m.host_entry)
             && !methods.contains(prog.functions[i].name.as_str())
     };
-    check_u16_boundary(prog, public, public)?;
+    check_u16_boundary(prog, public)?;
     expand_match_forms(prog)?;
     crate::borrowed::prepare(prog, &[])?;
     let mut c = Checker::new(prog, externs, &[])?;
