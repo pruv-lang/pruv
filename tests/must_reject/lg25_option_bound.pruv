@@ -1,0 +1,1 @@
+fn opt_len<T, const N: i64>(x: Option<[T; N]>) -> i64 { return 0; }

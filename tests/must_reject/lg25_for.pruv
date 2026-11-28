@@ -1,0 +1,5 @@
+fn total<const N: i64>(keys: [str; N]) -> i64 {
+  let mut t: i64 = 0;
+  for key in keys { t = t + 1; }
+  return t;
+}

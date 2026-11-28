@@ -15,7 +15,7 @@ pub const RS_ONLY_TYPE_NAMES: &[(&str, &str)] = &[("array_u16", "[u16]")];
 
 /// Whether `ty` is a builtin internal type name (shared table or Rust-only).
 pub fn is_builtin_type_name(ty: &str) -> bool {
-    BUILTIN_TYPE_NAMES.contains(&ty) || ty.starts_with(crate::gtype::FIXED_PREFIX) || RS_ONLY_TYPE_NAMES.iter().any(|(k, _)| *k == ty)
+    BUILTIN_TYPE_NAMES.contains(&ty) || (ty.starts_with(crate::gtype::FIXED_PREFIX) || ty.starts_with("@const:")) || RS_ONLY_TYPE_NAMES.iter().any(|(k, _)| *k == ty)
 }
 
 /// A name that is not built in is a user type (whether or not it is declared).

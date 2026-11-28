@@ -623,7 +623,7 @@ pub struct Arr {
     pub elem: Elem,
     /// G3: the element type of an array of abstract elements (`elem == Elem::Abs`), None otherwise.
     pub ety: Option<GType>,
-    /// P7-1: the `[T; N]` type of a fixed-length array value (its length is always the constant N).
+    /// The fixed-array type of this value, including its concrete or symbolic length.
     pub fix: Option<GType>,
 }
 
@@ -1778,6 +1778,13 @@ impl<'a> FnVerifier<'a> {
 
     // ---------- fresh (line 201) ----------
     /// `fresh(base, ty)`: bump k first, then the name is `base!k`; an array length is `base!k.len`.
+    fn length_term(&self, len: &GType) -> Ast {
+        if let Some(n) = len.const_value() {
+            return int_const(&self.z, n as i128);
+        }
+        self.z.int_const(&format!("const-length!{}!{}", len.owner.as_deref().unwrap(), len.index))
+    }
+
     pub fn try_fresh(&mut self, base: &str, ty: &Ty) -> R<Val> {
         self.k += 1;
         let n = format!("{}!{}", base, self.k);
@@ -1899,11 +1906,18 @@ impl<'a> FnVerifier<'a> {
             },
             // P7-1: [T; N] = (Array Int Int|Bool, N); the length is the constant N, the element domain is assumed on reads
             Ty::Inst(f) if f.is_fixed() => {
-                let (e, len) = f.fixed_parts().unwrap();
-                let int = z.int_sort();
-                let (esort, elem) = if *e == GType::bool() { (z.bool_sort(), Elem::Bool) } else { (z.int_sort(), Elem::I64) };
-                let arr_sort = z.array_sort(&int, &esort);
-                let mut a = Arr::new(z.constant(&n, &arr_sort), int_const(z, len as i128), base.to_string(), elem);
+                let (e, len) = f.fixed_shape().unwrap();
+                let elem = Model::buf_elem(ty);
+                let esort = match elem {
+                    Elem::Bool => z.bool_sort(),
+                    Elem::Abs => self.model.try_sort_of(&Ty::from_gtype(e))?,
+                    _ => z.int_sort(),
+                };
+                let arr_sort = z.array_sort(&z.int_sort(), &esort);
+                let mut a = Arr::new(z.constant(&n, &arr_sort), self.length_term(&len), base.to_string(), elem);
+                if elem == Elem::Abs {
+                    a.ety = Some(e.clone());
+                }
                 a.fix = Some(f.clone());
                 Ok(Val::Arr(a))
             }
@@ -2146,9 +2160,9 @@ impl<'a> FnVerifier<'a> {
     /// The Arr branch of verify.py `_wf_of` for a buffer field: `0 <= len <= 2^40` and, for narrow integers, the element domain.
     fn wf_buf(&self, ty: &Ty, n: &Ast, a: &Ast) -> Ast {
         if let Ty::Inst(g) = ty {
-            if let Some((e, len)) = g.fixed_parts() {
-                // P7-1 B: a stored `[T; N]` field has the length N and its element range
-                let ln = n.eq(&int_const(&self.z, len as i128));
+            if let Some((e, len)) = g.fixed_shape() {
+                // A stored fixed array has the declared length and element range.
+                let ln = n.eq(&self.length_term(&len));
                 return match intwidth::of(&e.name) {
                     Some(w) => self.z.and(&[ln, self.narrow_elem_domain(a, n, w)]),
                     None => ln,
@@ -2191,8 +2205,11 @@ impl<'a> FnVerifier<'a> {
                 coll_arr(a, n, name, &elem)
             } else if let Some(g) = match fty { Ty::Inst(g) if g.is_fixed() => Some(g.clone()), _ => None } {
                 // P7-1 B: a `[T; N]` field read back keeps its type and the constant length N
-                let len = g.fixed_parts().map_or(0, |(_, k)| k);
-                let mut arr = Arr::new(a, int_const(&self.z, len as i128), name.to_string(), Model::buf_elem(fty));
+                let (elem, len) = g.fixed_shape().unwrap();
+                let mut arr = Arr::new(a, self.length_term(&len), name.to_string(), Model::buf_elem(fty));
+                if arr.elem == Elem::Abs {
+                    arr.ety = Some(elem.clone());
+                }
                 arr.fix = Some(g);
                 arr
             } else {
@@ -2586,7 +2603,7 @@ impl<'a> FnVerifier<'a> {
                     if let Some(f) = &a.fix {
                         // P7-1: the length of a fixed array is the constant N (set by try_fresh); its elements keep
                         // the range of the element type, which contract reads do not assume
-                        if let Some(width) = f.fixed_parts().and_then(|(e, _)| intwidth::of(&e.name)) {
+                        if let Some(width) = f.fixed_shape().and_then(|(e, _)| intwidth::of(&e.name)) {
                             h.pc.push(self.narrow_elem_domain(&a.a, &a.n, width));
                         }
                     } else if keep.contains(n) {
@@ -3213,6 +3230,23 @@ impl<'a> FnVerifier<'a> {
                     return Ok(Val::Bool(v));
                 }
                 // G3: an abstract element has no numeric domain: no in_range assumption
+                if arr.fix.as_ref().is_some_and(GType::is_fixed_str) {
+                    let (bytes, len) = model.buf_parts(&Ty::Str, &v)?;
+                    let mut valid_index = g.to_vec();
+                    valid_index.push(self.z.and(&[i.ge_i(0), i.lt(&arr.n)]));
+                    let wf = self.wf_buf(&Ty::Str, &len, &bytes);
+                    if self.qstack.is_empty() {
+                        self.assume(st, &valid_index, wf);
+                    } else {
+                        // L-gaps 25: an index under a forall depends on its bound variables, so the cell facts are
+                        // quantified like the UTF-8 fact (assume_str_utf8)
+                        let guarded = self.z.and(&valid_index).implies(&wf);
+                        st.pc.push(self.z.forall(&self.qstack, &guarded, &[]));
+                    }
+                    let value = Val::Arr(Arr::new(bytes, len, arr.name, Elem::U8));
+                    self.assume_str_utf8(st, &valid_index, &Ty::Str, &value);
+                    return Ok(value);
+                }
                 if arr.elem == Elem::Abs {
                     if !code && model.has_vec_sums() {
                         self.observe_vec_element(st, g, &arr, &i)?;
@@ -3221,7 +3255,7 @@ impl<'a> FnVerifier<'a> {
                 }
                 if code {
                     // P7-1: a fixed array holds only values of its element type
-                    let width = arr.fix.as_ref().and_then(|f| intwidth::of(&f.fixed_parts()?.0.name)).unwrap_or(&intwidth::I64);
+                    let width = arr.fix.as_ref().and_then(|f| intwidth::of(&f.fixed_shape()?.0.name)).unwrap_or(&intwidth::I64);
                     let w = in_int_range(&self.z, &v, width);
                     self.assume(st, g, w);
                 }
@@ -3459,21 +3493,33 @@ impl<'a> FnVerifier<'a> {
     fn array_lit(&mut self, x: &ast::Call, args: Vec<Val>) -> R<Val> {
         let f = x.ty.as_deref().and_then(|k| GType::try_from_key(k).ok()).filter(GType::is_fixed)
             .ok_or_else(|| format!("array literal without a fixed type: {:?}", x.ty))?;
-        let (e, len) = f.fixed_parts().unwrap();
+        let f = gtype::substitute(&f, &self.theta);
+        let (e, len) = f.fixed_shape().unwrap();
         let is_bool = *e == GType::bool();
+        let pack = |v: &Val| {
+            if *e == GType::str() {
+                let arr = v.try_arr()?;
+                self.model.buf_put(&Ty::Str, &arr.n, &arr.a, &mut Vec::new())
+            } else {
+                Ok(v.try_ast()?.clone())
+            }
+        };
         let int = self.z.int_sort();
         let fill = match args.first() {
-            Some(v) => v.try_ast()?.clone(),
+            Some(v) => pack(v)?,
             None if is_bool => self.z.bool_val(false),
             None => self.z.int(0),
         };
         let mut a = self.z.const_array(&int, &fill);
-        if pruv_core::ast::array_repeat_len(&x.name).is_none() {
+        if x.name == ast::ARRAY_LIST {
             for (k, v) in args.iter().enumerate().skip(1) {
-                a = a.store(&self.z.int(k as i64), v.try_ast()?);
+                a = a.store(&self.z.int(k as i64), &pack(v)?);
             }
         }
-        let mut arr = Arr::new(a, int_const(&self.z, len as i128), "array".to_string(), if is_bool { Elem::Bool } else { Elem::I64 });
+        let mut arr = Arr::new(a, self.length_term(&len), "array".to_string(), Model::buf_elem(&Ty::Inst(f.clone())));
+        if arr.elem == Elem::Abs {
+            arr.ety = Some(e.clone());
+        }
         arr.fix = Some(f.clone());
         Ok(Val::Arr(arr))
     }
@@ -4157,7 +4203,10 @@ impl<'a> FnVerifier<'a> {
         }
         // G3 A2 (4.4): typed re-interpretation of the callee contract under the checker's recorded substitution
         let theta: Mapping = match &x.inst {
-            Some(i) => i.subst.iter().map(|(o, idx, t)| ((o.clone(), *idx), t.clone())).collect(),
+            Some(i) => i.subst.iter().map(|(o, idx, t)| {
+                let actual = if t.is_const_arg() { gtype::substitute(t, &self.theta) } else { t.clone() };
+                ((o.clone(), *idx), actual)
+            }).collect(),
             None => Mapping::new(),
         };
         let saved = std::mem::replace(&mut self.theta, theta);
@@ -7116,6 +7165,13 @@ impl<'a> FnVerifier<'a> {
         // P13o: the facts every value of the parameter types meets in a contract too
         let mut shape: Vec<Ast> = Vec::new();
         let mut w_ids: Vec<u32> = Vec::new();
+        for (index, param) in f.tparams.iter().enumerate() {
+            if let Some(max) = param.const_limit {
+                let key = gtype::mk_param(&gtype::fn_owner(&f.name), index, &param.name);
+                let n = self.length_term(&key);
+                pc.push(self.z.and(&[n.ge_i(0), n.le_i(max as i64)]));
+            }
+        }
         for p in &f.params {
             let pty = Ty::from_name(&p.ty);
             let v = self.try_fresh(&p.name, &pty)?;
@@ -7302,5 +7358,5 @@ fn bind_params(general: &Ast, plain: &Ast, ps: &[Ast], k0: &Ast, out: &mut [Opti
 
 /// P7-1 B: the integer width of a fixed array's element type (None for bool and for other arrays)
 fn fixed_elem_width(a: &Arr) -> Option<&'static IntWidth> {
-    a.fix.as_ref().and_then(|f| f.fixed_parts()).and_then(|(e, _)| intwidth::of(&e.name))
+    a.fix.as_ref().and_then(|f| f.fixed_shape()).and_then(|(e, _)| intwidth::of(&e.name))
 }

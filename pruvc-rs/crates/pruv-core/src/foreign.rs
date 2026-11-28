@@ -259,7 +259,7 @@ fn listener_t() -> GType {
 }
 
 fn tp(name: &str, bound: Option<&str>) -> TParam {
-    TParam { line: 0, col: 0, name: name.to_string(), bound: bound.map(|b| b.to_string()) }
+    TParam { line: 0, col: 0, name: name.to_string(), bound: bound.map(|b| b.to_string()), const_limit: None }
 }
 
 /// The catalog declaration of `name`, or None when `name` is not a catalog function.

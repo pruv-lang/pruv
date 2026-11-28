@@ -347,6 +347,7 @@ fn bit_llvm(n: &str) -> Option<&'static str> {
 pub const OPT: &str = "{ i1, i64 }";
 /// Option/Result stored inside a contract aggregate
 pub const COPT: &str = "{ i1, i128 }";
+const STR_CELL: &str = "{ ptr, i64 }";
 pub const ARR: &str = "{ ptr, i64, i64 }"; // P3: owned buffer inside the module: { data, len, cap }; cap = allocated element count
 /// R-6g9-1: a borrowed view result `{ data, len }`; it owns nothing and is never freed
 pub const VIEW: &str = "{ ptr, i64 }";
@@ -994,12 +995,16 @@ fn fixed_key(t: &str) -> Option<crate::gtype::GType> {
 
 /// P7-1: the byte size of a fixed-array element in memory.
 fn fixed_elem_bytes(e: &crate::gtype::GType) -> u64 {
-    if e.name == "bool" { 1 } else { crate::intwidth::of(&e.name).map_or(8, |w| u64::from(w.bits / 8)) }
+    crate::gtype::GType::fixed_elem_bytes(e)
 }
 
 /// P7-1: the in-memory IR type of a fixed-array element.
 fn fixed_elem_ir(e: &crate::gtype::GType) -> &'static str {
-    if e.name == "bool" { "i8" } else { vkind(&e.name).name() }
+    match e.name.as_str() {
+        "bool" => "i8",
+        "str" => STR_CELL,
+        _ => vkind(&e.name).name(),
+    }
 }
 
 /// The internal SSA type of a Pruv type
@@ -5475,6 +5480,10 @@ impl<'a> FnGen<'a> {
         if el.name == "bool" {
             return self.op(format!("zext i1 {} to i8", v.a));
         }
+        if el.name == "str" {
+            let pair = self.op(format!("insertvalue {STR_CELL} poison, ptr {}, 0", v.a))?;
+            return self.op(format!("insertvalue {STR_CELL} {pair}, i64 {}, 1", v.b));
+        }
         Ok(v.a.clone())
     }
 
@@ -5506,6 +5515,14 @@ impl<'a> FnGen<'a> {
             let x8 = self.op(format!("load i8, ptr {}", g))?;
             let b = self.op(format!("icmp ne i8 {}, 0", x8))?;
             return Ok(V::new(Kind::I1, b));
+        }
+        if el.name == "str" {
+            let pair = self.op(format!("load {STR_CELL}, ptr {g}"))?;
+            let ptr = self.op(format!("extractvalue {STR_CELL} {pair}, 0"))?;
+            let len = self.op(format!("extractvalue {STR_CELL} {pair}, 1"))?;
+            let mut value = V::with_b(Kind::Arr, ptr, len);
+            value.ty = Some(STR.into());
+            return Ok(value);
         }
         let k = vkind(&el.name);
         let r = self.op(format!("load {}, ptr {}", k.name(), g))?;
@@ -8036,7 +8053,7 @@ impl<'a> FnGen<'a> {
                 let (el, n) = f.fixed_parts().unwrap();
                 let el = el.clone();
                 if let Expr::Call(c) = &*x.array {
-                    if c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some() {
+                    if el.name != "str" && (c.name == ARRAY_LIST || array_repeat_len(&c.name).is_some()) {
                         // P7-1 B: a literal indexed in a contract: every element in contract form, then a select chain
                         let vs = self.fixed_lit_cev(c)?;
                         let i = self.cev(&x.index)?;
@@ -8066,7 +8083,7 @@ impl<'a> FnGen<'a> {
                 let g = self.op(format!("getelementptr inbounds {}, ptr {}, i64 0, i64 {}", lty(&f.to_key()), p, ii))?;
                 let v = self.fixed_load(&el, &g)?;
                 match v.k {
-                    Kind::I1 => Ok(v),
+                    Kind::I1 | Kind::Arr => Ok(v),
                     Kind::Narrow(w) => {
                         let r = self.op(format!("{} {} {} to i128", if w.signed { "sext" } else { "zext" }, w.llvm(), v.a))?;
                         Ok(V::new(Kind::I128, r))

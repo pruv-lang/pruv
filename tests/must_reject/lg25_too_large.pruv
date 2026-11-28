@@ -1,0 +1,2 @@
+fn key_count<const N: i64>() -> i64 { let a: [str; N] = ["x"; N]; return len(a); }
+fn bad() -> i64 { return key_count::<4097>(); }

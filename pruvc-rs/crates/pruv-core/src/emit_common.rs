@@ -138,7 +138,8 @@ pub fn rty_g(g: &GType, param: bool) -> String {
     }
     if let Some((elem, n)) = g.fixed_parts() {
         // P7-1: a fixed-length array is a Rust array by value
-        return format!("[{}; {}]", rty_g(elem, false), n);
+        let elem = if *elem == GType::str() { "&'static str".into() } else { rty_g(elem, false) };
+        return format!("[{}; {}]", elem, n);
     }
     if structured_builtin(g) {
         let x = rty_g(&g.args[0], false);
@@ -249,6 +250,9 @@ fn type_repr(t: &str) -> String {
 pub fn try_cty_g(g: &GType) -> Result<String, String> {
     if let Some((e, n)) = g.fixed_parts() {
         // P7-1 B: a `[T; N]` struct field mirrors to `[i128; N]` (`[bool; N]`)
+        if *e == GType::str() {
+            return Ok(rty_g(g, false));
+        }
         return Ok(format!("[{}; {}]", try_cty_g(e)?, n));
     }
     if let Some(base) = g.view_base() {

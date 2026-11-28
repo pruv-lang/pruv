@@ -413,7 +413,7 @@ fn fixed_element(line: i64, col: i64, what: &str) -> PruvError {
 
 /// P7-1: the storage cap of one fixed-length array (checked_mul of the element size and the length).
 pub(crate) fn fixed_size(line: i64, col: i64, elem: &GType, n: u64) -> R<()> {
-    let bytes = elem.int_width().map_or(1, |w| (w.bits / 8) as u64);
+    let bytes = GType::fixed_elem_bytes(elem);
     match bytes.checked_mul(n) {
         Some(b) if b <= crate::gtype::FIXED_MAX_BYTES => Ok(()),
         _ => Err(PruvError::new("type", line, col, "fixed_array_length",
@@ -421,6 +421,11 @@ pub(crate) fn fixed_size(line: i64, col: i64, elem: &GType, n: u64) -> R<()> {
                 crate::gtype::format_type(elem), n),
             "use a buffer (alloc) for large arrays")),
     }
+}
+
+fn generic_param(owner: &str, index: usize, tp: &TParam) -> GType {
+    let name = if tp.const_limit.is_some() { format!("@const:{}", tp.name) } else { tp.name.clone() };
+    mk_param(owner, index, &name)
 }
 
 fn is_upper(s: &str) -> bool {
@@ -599,6 +604,10 @@ impl Parser {
         let mut j = 0;
         while j < self.t.len() {
             if !(self.t[j].kind == Kind::Kw && self.t[j].val == "const") {
+                j += 1;
+                continue;
+            }
+            if j > 0 && matches!(self.t[j - 1].val.as_str(), "<" | ",") {
                 j += 1;
                 continue;
             }
@@ -799,7 +808,15 @@ impl Parser {
 
     /// P7-1: the length of `[T; N]` / `[x; N]` after the `;`: a closed constant expression, computed in its own
     /// width (an untyped literal expression in i64), then taken as a nonnegative length.
-    fn fixed_len(&mut self) -> R<u64> {
+    fn fixed_len(&mut self) -> R<GType> {
+        if let Some(n) = self.scope.get(&self.peek(0).val).filter(|n| n.is_const_arg()).cloned() {
+            self.bump();
+            if !self.at("]", 0) {
+                let t = self.peek(0);
+                return Err(self.generic_syntax(t, "a const parameter must be the whole array length", "write a bare length parameter"));
+            }
+            return Ok(n);
+        }
         let e = self.expr()?;
         if is_bool_shaped(&e) {
             return Err(PruvError::new("type", e.line(), e.col(), "const_type",
@@ -816,13 +833,15 @@ impl Parser {
             return Err(PruvError::new("type", e.line(), e.col(), "fixed_array_length",
                 format!("an array length must be >= 0, found {}", v), "write a nonnegative length"));
         }
-        u64::try_from(v).map_err(|_| PruvError::new("type", e.line(), e.col(), "fixed_array_length",
+        u64::try_from(v).map(GType::const_arg).map_err(|_| PruvError::new("type", e.line(), e.col(), "fixed_array_length",
             "the array length is too large", ""))
     }
 
-    /// P7-1: `[T; N]` after `[T` (at the `;`): only scalar integer and bool elements, at most FIXED_MAX_BYTES.
+    /// Parse a fixed array and check the size when its length is concrete.
     fn fixed_array_type(&mut self, open: &Tok, e: &Tok, fixed_ok: bool) -> R<GType> {
-        let elem = if e.val == "bool" { GType::bool() } else if intwidth::of(&e.val).is_some() {
+        let elem = if let Some(t) = self.scope.get(&e.val).filter(|t| !t.is_const_arg()) {
+            t.clone()
+        } else if matches!(e.val.as_str(), "bool" | "str") || intwidth::of(&e.val).is_some() {
             GType::new(&e.val, Vec::new())
         } else {
             return Err(fixed_element(e.line, e.col, &e.val));
@@ -835,8 +854,13 @@ impl Parser {
                 "a fixed-length array is a local, parameter, result or field of a non-generic struct or enum variant only for now: not a field of a generic type, tuple component, type argument, nested array or `ref` (parity row P7-8)",
                 "keep the array in a let, a parameter, a result or a field of a non-generic struct or enum"));
         }
-        fixed_size(open.line, open.col, &elem, n)?;
-        Ok(GType::fixed(elem, n))
+        if let Some(k) = n.const_value() {
+            if elem.owner.is_some() {
+                return Err(fixed_element(e.line, e.col, &e.val));
+            }
+            fixed_size(open.line, open.col, &elem, k)?;
+        }
+        Ok(GType::fixed_with_len(elem, n))
     }
 
     /// A field name after `.`: an identifier, or a tuple index `0`, `1`, .. (P6).
@@ -2052,9 +2076,23 @@ impl Parser {
         }
         let mut out: Vec<TParam> = Vec::new();
         loop {
+            let is_const = self.at("const", 0);
+            if is_const {
+                let t = self.next();
+                if !owner.starts_with("fn:") {
+                    return Err(self.generic_syntax(&t, "const parameters are allowed on functions only", ""));
+                }
+            }
             let n = self.ident()?;
             let mut bound: Option<String> = None;
-            if self.at(":", 0) {
+            if is_const {
+                self.expect(":")?;
+                let t = self.next();
+                if t.val != "i64" {
+                    return Err(PruvError::new("type", t.line, t.col, "const_type", "a const parameter must have type i64", ""));
+                }
+            }
+            if !is_const && self.at(":", 0) {
                 self.bump();
                 let b = self.peek(0).clone();
                 if b.kind != Kind::Id {
@@ -2071,7 +2109,7 @@ impl Parser {
                     ));
                 }
             }
-            out.push(TParam { line: n.line, col: n.col, name: n.val, bound });
+            out.push(TParam { line: n.line, col: n.col, name: n.val, bound, const_limit: is_const.then_some(i64::MAX as u64) });
             if !self.at(",", 0) {
                 break;
             }
@@ -2084,7 +2122,7 @@ impl Parser {
         self.expect(">")?;
         self.scope = HashMap::new();
         for (i, tp) in out.iter().enumerate() {
-            self.scope.entry(tp.name.clone()).or_insert_with(|| mk_param(owner, i, &tp.name));
+            self.scope.entry(tp.name.clone()).or_insert_with(|| generic_param(owner, i, tp));
         }
         Ok(out)
     }
@@ -2103,7 +2141,16 @@ impl Parser {
                 ));
             }
             let at = self.peek(0).clone();
-            let arg = self.type_g(false)?.0;
+            let arg = if expr && at.kind == Kind::Int {
+                self.bump();
+                let n = at.val.parse::<i64>().map_err(|_| self.generic_syntax(&at, "a const argument must be a nonnegative i64 literal", ""))?;
+                GType::const_arg(n as u64)
+            } else if expr && self.scope.get(&at.val).is_some_and(GType::is_const_arg) {
+                self.bump();
+                self.scope[&at.val].clone()
+            } else {
+                self.type_g(false)?.0
+            };
             if intwidth::is_narrow(&arg.name) || arg.name == "array_u16"
                 || arg.view_base().is_some_and(|base| base.name == "array_u16")
             {
@@ -2175,6 +2222,9 @@ impl Parser {
             return Ok(GType::new(&n.val, args));
         }
         if let Some(t) = self.scope.get(&n.val) {
+            if t.is_const_arg() {
+                return Err(PruvError::new("type", n.line, n.col, "const_type", "a const parameter is an array length, not a type", ""));
+            }
             return Ok(t.clone());
         }
         Ok(GType::new(&n.val, Vec::new()))
@@ -2429,7 +2479,8 @@ impl Parser {
             if self.aliases.contains_key(&e.val) && !self.scope.contains_key(&e.val) {
                 // P9: an alias element: a scalar continues as its spelled name, any other type is the element itself
                 let g = self.alias_use(&e, false)?;
-                if g.args.is_empty() && g.owner.is_none() && (g.name == "bool" || intwidth::of(&g.name).is_some()) {
+                // L-gaps 25: a `str` alias names the static `[str; N]` element the same way
+                if g.args.is_empty() && g.owner.is_none() && (g.name == "bool" || g.name == "str" || intwidth::of(&g.name).is_some()) {
                     e.val = g.name;
                 } else {
                     if self.at(";", 0) && !self.at("<=", 1) {
@@ -2565,7 +2616,7 @@ impl Parser {
             let mut all = self.impl_tparams.clone();
             all.extend(tparams);
             tparams = all;
-            self.scope = tparams.iter().enumerate().map(|(i, tp)| (tp.name.clone(), mk_param(&fowner, i, &tp.name))).collect();
+            self.scope = tparams.iter().enumerate().map(|(i, tp)| (tp.name.clone(), generic_param(&fowner, i, tp))).collect();
         }
         self.expect("(")?;
         let mut params = Vec::new();
@@ -3965,8 +4016,9 @@ impl Parser {
                 self.bump();
                 let n = self.fixed_len()?;
                 self.expect("]")?;
-                return Ok(Expr::Call(Call { line, col, name: format!("{}{}", crate::ast::ARRAY_REPEAT, n), args: vec![first],
-                    ty: None, targs: None, inst: None, old: None, opaque_c: false }));
+                return Ok(Expr::Call(Call { line, col, name: n.const_value().map_or_else(|| crate::ast::SYMBOLIC_REPEAT.to_string(),
+                    |k| format!("{}{}", crate::ast::ARRAY_REPEAT, k)), args: vec![first],
+                    ty: None, targs: n.owner.is_some().then(|| vec![n]), inst: None, old: None, opaque_c: false }));
             }
             let mut args = vec![first];
             while self.at(",", 0) {

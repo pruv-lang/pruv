@@ -1,0 +1,1 @@
+fn bad<const N: i64>(a: [str; N], b: [str; N]) -> bool { return a == b; }

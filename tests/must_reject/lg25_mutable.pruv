@@ -1,0 +1,1 @@
+fn bad() -> i64 { let mut keys: [str; 1] = ["a"]; return 0; }

@@ -1365,7 +1365,7 @@ object. `root_keys` allocates nothing, walks once, and an empty object reads onl
 | Row | Kind | Difference | What closes it | Where |
 |---|---|---|---|---|
 | 4.4n-KL | closed (root) | one member walk per root key | done in 4.4s: `root_keys` on the access cursor | `pkgs/access`, `claude/entry`, `claude/import` |
-| 4.4s-FK | language gap, open | no generic `fields(doc, id, [&str; N]) -> [i64; N]` | `[str; N]` or const generics in the language; then move `root_keys` into `access` | compiler (not changed here; not attempted in L-gaps 24) |
+| 4.4s-FK | closed (L-gaps 25) | no generic `fields(doc, id, [&str; N]) -> [i64; N]` | R-6t-5 (`const N: i64`, static `[str; N]`); `access::fields` added, `root_keys` uses it | `pkgs/access`, `claude/entry`, `claude/import`, compiler |
 
 ### Consumer tests (step 4.4s)
 
@@ -1467,3 +1467,28 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
   words; contracts unchanged. Full rows: `../lib/RESHAPE.md` "Rows after L-gaps 18".
 - 4.4l-VU now differs from `run_utf8_validation` only in the alignment (4.4zc-PA, still open: offset `i % 8 == 0`
   instead of the pointer's `align_offset`).
+
+### Rows after L-gaps 25
+
+- 4.4s-FK closed. SPEC R-6t-5 adds `const N: i64` function parameters (N inferred from an argument length or given
+  as `::<N>`) and static `[str; N]` (literal elements only; by-value parameter or immutable local). Each concrete N
+  is one instance on both backends (Rust `[&'static str; N]`, LLVM `[N x { ptr, i64 }]`).
+- New in `pkgs/access`: `fields<const N: i64>(doc, id, keys: [str; N]) -> [i64; N]`. `members_end`, then one walk
+  with `member_next`; for each member an inner loop over `keys` sets `r[i] = j + 1` on `key_is` (last match wins);
+  `[stop; N]` for a bad id / non-object, `[-4; N]` for a corrupt tape, `-1` for a missing key.
+  `entry::root_keys` is `access::fields(doc, 0, [13 keys])`; `RootKeys` is gone and `entry` / `import` read
+  `k[0]`..`k[12]` (slot order in the comment above `root_keys`).
+- Structure against hand m11 `fields<const N: usize>` (`r = [None; N]`, kind check, `for _ in 0..count`, inner
+  `for j in 0..N` with `keys[j].as_bytes() == k`): same (one walk, inner key loop, last wins, no allocation). The
+  generated Rust is `access_6_fields_1_k13` in `claude/work/a4/rs_rust/a4_root_gen.rs`.
+- Performance (claude `q_measure.py --pairs rs/rust,rs/llvm`, 7 rounds, new and base a2726b61 back to back with the
+  same compiler under the perf lock, load about 3; cells in `work/lgaps25/perf_cells.json`): (Pruv/hand new) over
+  (Pruv/hand base) geometric mean 1.037, turns10-200 1.07-1.12, other inputs 0.98-1.06. The base `if`/`else if`
+  chain stopped at the first matching key; `fields` (like the hand) tries all 13 keys per member, and `key_is`
+  (`may_match` + `ascii_equal`) costs more than the hand's length check + `memcmp`. Open as 4.4zf-KE (`key_is`
+  against slice equality); the structure is the same.
+- Audit fixes before the close (L-gaps 25): `[str; N]` cell facts are quantified under `forall`;
+  `Option<[T; N]>` checks the `Element` bound; a `str` alias names the element; an explicit `::<N>` that disagrees
+  with an argument length is `type/fixed_array_length`. `for` over `[str; N]` and array patterns over a
+  length-parameter array are unsupported in SPEC R-6t-5 (index loop and `len` tests instead). The fixes touch the
+  checker and verifier only, so the measured code is unchanged.

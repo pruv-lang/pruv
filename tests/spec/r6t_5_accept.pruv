@@ -1,0 +1,92 @@
+// spec: R-6t-5 accept
+fn key_size(key: str) -> i64
+  ensures result == len(key)
+{
+  return len(key);
+}
+
+fn sizes<const N: i64>(keys: [str; N]) -> [i64; N]
+  ensures len(result) == len(keys)
+{
+  let mut out: [i64; N] = [-1; N];
+  let mut i: i64 = 0;
+  while i < len(keys)
+    invariant 0 <= i && i <= len(keys)
+    decreases len(keys) - i
+  {
+    out[i] = key_size(keys[i]);
+    i = i + 1;
+  }
+  return out;
+}
+
+fn check_utf8<const N: i64>(keys: [str; N]) -> i64
+  requires len(keys) > 0 && len(keys[0]) == 2
+  requires keys[0][0] == 195 && keys[0][1] == 169
+{
+  return len(keys[0]);
+}
+
+fn relay<const N: i64>(keys: [str; N]) -> [i64; N]
+  ensures len(result) == len(keys)
+{
+  return sizes::<N>(keys);
+}
+
+fn result_only<const N: i64>() -> [i64; N] {
+  return [-1; N];
+}
+
+fn use_sizes() -> i64 {
+  let keys: [str; 1] = ["é"];
+  let zero: [i64; 0] = sizes([""; 0]);
+  let one: [i64; 1] = relay(keys);
+  let many: [i64; 13] = sizes::<13>([""; 13]);
+  let inferred: [i64; 13] = sizes(["type", "timestamp", "", "é", "a", "b", "c", "d", "e", "f", "g", "h", "i"]);
+  let max: [str; 4096] = ["ok"; 4096];
+  let largest: [i64; 4096] = sizes(max);
+  let result_len: [i64; 2] = result_only::<2>();
+  assert len(zero) == 0 && len(one) == 1 && len(many) == 13 && len(inferred) == 13;
+  assert len(largest) == 4096 && len(result_len) == 2;
+  return check_utf8(keys);
+}
+
+// L-gaps 25 audit fixes: cell facts under forall, Option element bound, str alias, explicit length,
+// and the supported forms for the unsupported `for` and array pattern
+fn all_wf<const N: i64>(keys: [str; N]) -> i64 {
+  assert forall i in 0..len(keys): 0 <= len(keys[i]) && len(keys[i]) <= 1099511627776;
+  return 0;
+}
+
+fn opt_len<T: Element, const N: i64>(x: Option<[T; N]>) -> i64 {
+  return 0;
+}
+
+type Text = str;
+
+fn text_count<const N: i64>(keys: [Text; N]) -> i64 {
+  return len(keys);
+}
+
+fn nonempty<const N: i64>(keys: [str; N]) -> i64 {
+  let mut t: i64 = 0;
+  for i in 0..len(keys)
+    invariant 0 <= t && t <= i
+  {
+    if len(keys[i]) > 0 { t = t + 1; }
+  }
+  return t;
+}
+
+fn first_n<const N: i64>(xs: [i64; N]) -> i64 {
+  if len(xs) > 0 { return xs[0]; }
+  return 0;
+}
+
+fn use_fixes() -> i64 {
+  let two: [i64; 2] = [5, 6];
+  let a: i64 = text_count(["a", "b"]);
+  let b: i64 = text_count::<2>(["a", "b"]);
+  let c: i64 = nonempty(["", "x"]);
+  return first_n(two);
+}

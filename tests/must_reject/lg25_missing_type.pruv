@@ -1,0 +1,2 @@
+fn key_count<T: Element, const N: i64>(keys: [T; N]) -> i64 { return len(keys); }
+fn bad() -> i64 { return key_count([0]); }

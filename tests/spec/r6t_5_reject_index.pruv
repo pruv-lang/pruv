@@ -1,0 +1,4 @@
+// spec: R-6t-5 reject
+fn first<const N: i64>(keys: [str; N]) -> i64 {
+  return len(keys[0]);
+}

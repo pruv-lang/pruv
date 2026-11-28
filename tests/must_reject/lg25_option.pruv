@@ -1,0 +1,1 @@
+fn bad<const N: i64>(keys: Option<[str; N]>) -> i64 { return 0; }

@@ -198,6 +198,53 @@ impl GType {
         GType::new(&format!("{}{}", FIXED_PREFIX, n), vec![elem])
     }
 
+    // Const arguments share the existing generic substitution and specialization machinery.
+    // A symbolic argument has the same owner/index identity as a type parameter.
+    pub fn const_arg(value: u64) -> GType {
+        GType::new(&format!("@const:{}", value), Vec::new())
+    }
+
+    pub fn const_value(&self) -> Option<u64> {
+        self.name.strip_prefix("@const:")?.parse().ok()
+    }
+
+    pub fn is_const_arg(&self) -> bool {
+        self.name.starts_with("@const:")
+    }
+
+    pub fn fixed_with_len(elem: GType, len: GType) -> GType {
+        match len.const_value() {
+            Some(n) => Self::fixed(elem, n),
+            None => GType::new("@fixed:param", vec![elem, len]),
+        }
+    }
+
+    pub fn fixed_shape(&self) -> Option<(&GType, GType)> {
+        if let ("@fixed:param", [elem, len]) = (self.name.as_str(), self.args.as_slice()) {
+            return Some((elem, len.clone()));
+        }
+        self.fixed_parts().map(|(e, n)| (e, Self::const_arg(n)))
+    }
+
+    pub fn is_fixed_str(&self) -> bool {
+        self.is_fixed() && self.args[0] == Self::str()
+    }
+
+    pub fn contains_fixed_str(&self) -> bool {
+        self.is_fixed_str() || self.args.iter().any(Self::contains_fixed_str)
+    }
+
+    pub fn fixed_elem_bytes(elem: &GType) -> u64 {
+        if *elem == Self::str() {
+            16
+        } else if elem.owner.is_some() {
+            // Element permits i64 and bool, so both layouts must fit.
+            8
+        } else {
+            crate::intwidth::of(&elem.name).map_or(1, |w| (w.bits / 8) as u64)
+        }
+    }
+
     /// P7-1: (element, length) of a fixed-length array type.
     pub fn fixed_parts(&self) -> Option<(&GType, u64)> {
         if self.owner.is_some() || self.args.len() != 1 {
@@ -208,7 +255,7 @@ impl GType {
     }
 
     pub fn is_fixed(&self) -> bool {
-        self.fixed_parts().is_some()
+        self.fixed_parts().is_some() || self.name == "@fixed:param" && self.args.len() == 2
     }
 
     /// Legacy array type holding `elem`; None when no such legacy array type exists.
@@ -278,7 +325,7 @@ pub(crate) fn key_is_scalar_vec(key: &str) -> bool {
 /// for the duration of one internal call.
 pub(crate) fn key_is_fixed_borrow(actual: &str, expected: &str) -> bool {
     let (a, e) = (GType::from_key(actual), GType::from_key(expected));
-    e.is_array() && e.args.is_empty() && a.fixed_parts().is_some_and(|(el, _)| Some(el.clone()) == e.array_elem())
+    e.is_array() && e.args.is_empty() && a.fixed_shape().is_some_and(|(el, _)| Some(el.clone()) == e.array_elem())
 }
 
 pub(crate) fn key_is_vec_slice_arg(actual: &str, expected: &str) -> bool {
@@ -559,6 +606,9 @@ pub fn param_id(ty: &GType) -> Option<ParamId> {
 
 /// Source spelling: "Pair<i64, bool>", "[T]", "Option<bool>". Legacy types print as in the old dumps.
 pub fn format_type(ty: &GType) -> String {
+    if ty.is_const_arg() {
+        return ty.name.trim_start_matches("@const:").to_string();
+    }
     if ty.owner.is_some() {
         return ty.name.clone();
     }
@@ -569,8 +619,8 @@ pub fn format_type(ty: &GType) -> String {
         }
         return crate::typeinfo::type_name(&ty.name);
     }
-    if let Some((e, n)) = ty.fixed_parts() {
-        return format!("[{}; {}]", format_type(e), n);
+    if let Some((e, n)) = ty.fixed_shape() {
+        return format!("[{}; {}]", format_type(e), format_type(&n));
     }
     let inner = ty.args.iter().map(format_type).collect::<Vec<_>>().join(", ");
     match ty.name.as_str() {
@@ -618,6 +668,10 @@ pub fn substitute(ty: &GType, mapping: &Mapping) -> GType {
     }
     let mut args: Vec<GType> = ty.args.iter().map(|a| substitute(a, mapping)).collect();
     match ty.name.as_str() {
+        "@fixed:param" => {
+            let len = args.pop().unwrap();
+            GType::fixed_with_len(args.pop().unwrap(), len)
+        }
         "array" => mk_array(args.swap_remove(0)),
         "option" => mk_option(args.swap_remove(0)),
         "result" if args.len() == 2 => {
@@ -758,6 +812,9 @@ pub fn dependencies(ty: &GType) -> Vec<String> {
 
 /// Canonical specialization encoding (G3_SPEC 5.2); only concrete value types are encodable (Err otherwise).
 pub fn encode(ty: &GType) -> Result<String, String> {
+    if let Some(n) = ty.const_value() {
+        return Ok(format!("k{}", n));
+    }
     if *ty == GType::i64() {
         return Ok("i".to_string());
     }

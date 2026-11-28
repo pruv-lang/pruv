@@ -605,7 +605,11 @@ impl<'a> Mono<'a> {
                 }
                 let mut name = x.name.clone();
                 let mut new_inst: Option<Inst> = None;
-                if crate::ast::ValueMatch::matches(x) {
+                if x.name == SYMBOLIC_REPEAT {
+                    let n = ty.as_deref().map(GType::from_key).and_then(|ty| ty.fixed_parts().map(|(_, n)| n))
+                        .ok_or_else(|| MonoError::Internal("specialization: unresolved repeat length".into()))?;
+                    name = format!("{}{}", ARRAY_REPEAT, n);
+                } else if crate::ast::ValueMatch::matches(x) {
                     // P9a-5: the arms name the scrutinee's (lowered) enum, as in Stmt::Match
                     let mut arms = crate::ast::ValueMatch::arms(x);
                     let low = args.first().and_then(|s| expr_ty_of(s).clone()).map(|t| t.split('<').next().unwrap_or("").to_string());

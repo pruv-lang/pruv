@@ -1,0 +1,2 @@
+fn count<const N: i64>(a: [i64; N]) -> i64 { return len(a); }
+fn bad() -> i64 { return count::<bool>([1]); }

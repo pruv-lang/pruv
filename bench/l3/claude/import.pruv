@@ -181,9 +181,9 @@ pub fn read_head(data: [u8], cut_after: bool) -> [i64] ! alloc
         let line: crate::entry::Line = crate::entry::parse_line(data, start, end);
         match line {
           crate::entry::Line::Object(d) => {
-            let k: crate::entry::RootKeys = crate::entry::root_keys(d);
+            let k: [i64; 13] = crate::entry::root_keys(d);
             if !has_cwd {
-              let f: crate::entry::Field = crate::entry::string_field_of(d, k.cwd);
+              let f: crate::entry::Field = crate::entry::string_field_of(d, k[7]);
               match f {
                 crate::entry::Field::Value(v) => { cwd = move v; has_cwd = true; }
                 crate::entry::Field::Missing => {}
@@ -191,7 +191,7 @@ pub fn read_head(data: [u8], cut_after: bool) -> [i64] ! alloc
               }
             }
             if !has_ep {
-              let g: crate::entry::Field = crate::entry::string_field_of(d, k.entrypoint);
+              let g: crate::entry::Field = crate::entry::string_field_of(d, k[8]);
               match g {
                 crate::entry::Field::Value(v) => { ep = move v; has_ep = true; }
                 crate::entry::Field::Missing => {}
@@ -247,8 +247,8 @@ pub fn tail_info(data: [u8], cut_before: bool) -> [i64] ! alloc
         let line: crate::entry::Line = crate::entry::parse_line(data, start, end);
         match line {
           crate::entry::Line::Object(d) => {
-            let k: crate::entry::RootKeys = crate::entry::root_keys(d);
-            let tf: i64 = k.timestamp;
+            let k: [i64; 13] = crate::entry::root_keys(d);
+            let tf: i64 = k[1];
             if tf < -1 { return fail_at(start, end, 0); }
             if tf >= 0 {
               let iso: crate::time::Iso = crate::time::iso_of(d, tf);
@@ -258,7 +258,7 @@ pub fn tail_info(data: [u8], cut_before: bool) -> [i64] ! alloc
                 None => {}
               }
             }
-            let t: i64 = crate::entry::title_for_type(d, crate::entry::string_of(d, k.ty), k, inout best);
+            let t: i64 = crate::entry::title_for_type(d, crate::entry::string_of(d, k[0]), k, inout best);
             if t != 0 && t != 1 { return fail_at(start, end, 0); }
             if len(best.text) > 50331648 { return fail_at(start, end, 0); }
           }
@@ -365,7 +365,7 @@ fn answer_blocks(doc: crate::json::JsonDocument, c: i64, at: Option<[u8; 24]>, i
 // The timestamp is read only where the hand reads it: at begin, and once before string or array content.
 // The root keys come from one walk (`entry::root_keys`, 4.4s); each slot is read in the branch that reads it (hand `get`). Collector state: at most one begin per
 // call, so begun grows by at most 1.
-fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: crate::entry::RootKeys, inout col: crate::turns::Collector) -> Effect ! alloc
+fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: [i64; 13], inout col: crate::turns::Collector) -> Effect ! alloc
   requires crate::turns::ok(col) && col.begun < 1000000000000
   requires crate::json::doc_strings(doc)
   ensures crate::turns::ok(col)
@@ -381,7 +381,7 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: crate::entry::RootK
     match h {
       crate::entry::Field::Value(p) => {
         if len(p) > 50331648 { return Effect::Defect(-4); }
-        let created: crate::time::Iso = stamp_from(doc, k.timestamp);
+        let created: crate::time::Iso = stamp_from(doc, k[1]);
         if created.status < 0 { return Effect::Defect(created.status); }
         crate::turns::begin(inout col, p, created.at);
         return Effect::Done(-1);
@@ -394,10 +394,10 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: crate::entry::RootK
   let asst: i64 = crate::access::string_is(doc, ty, "assistant");
   if asst < 0 { return Effect::Defect(asst); }
   if asst == 0 { return Effect::Done(-1); }
-  let side: i64 = crate::entry::true_of(doc, k.side);
+  let side: i64 = crate::entry::true_of(doc, k[2]);
   if side < 0 { return Effect::Defect(side); }
   if side == 1 { return Effect::Done(-1); }
-  let msg: i64 = crate::entry::object_of(doc, k.message);
+  let msg: i64 = crate::entry::object_of(doc, k[3]);
   if msg == -1 { return Effect::Done(-1); }
   if msg < 0 { return Effect::Defect(msg); }
   let mut model_id: i64 = crate::entry::string_of(doc, crate::access::field(doc, msg, "model"));
@@ -406,7 +406,7 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: crate::entry::RootK
     let synthetic: i64 = crate::access::string_is(doc, model_id, "<synthetic>");
     if synthetic < 0 { return Effect::Defect(synthetic); }
     if synthetic == 1 {
-      let api: i64 = crate::entry::true_of(doc, k.api);
+      let api: i64 = crate::entry::true_of(doc, k[5]);
       if api < 0 { return Effect::Defect(api); }
       if api != 1 { return Effect::Done(-1); }
       model_id = -1;
@@ -424,7 +424,7 @@ fn consume_entry(doc: crate::json::JsonDocument, ty: i64, k: crate::entry::RootK
   let kc: i64 = crate::access::kind(doc, c);
   if kc < 0 { return Effect::Defect(kc); }
   if kc != 4 && kc != 5 { return Effect::Done(model_id); }
-  let completed: crate::time::Iso = stamp_from(doc, k.timestamp);
+  let completed: crate::time::Iso = stamp_from(doc, k[1]);
   if completed.status < 0 { return Effect::Defect(completed.status); }
   if kc == 5 {
     let code: i64 = answer_blocks(doc, c, completed.at, inout col);
@@ -479,8 +479,8 @@ fn window_object(d: crate::json::JsonDocument, inout best: crate::entry::RankedT
   ensures crate::turns::ok(col)
   ensures old(col).begun <= col.begun && col.begun <= old(col).begun + 1
 {
-  let k: crate::entry::RootKeys = crate::entry::root_keys(d);
-  let ty: i64 = crate::entry::string_of(d, k.ty);
+  let k: [i64; 13] = crate::entry::root_keys(d);
+  let ty: i64 = crate::entry::string_of(d, k[0]);
   let t: i64 = crate::entry::title_for_type(d, ty, k, inout best);
   if t != 0 && t != 1 { return false; }
   if len(best.text) > 50331648 { return false; }
