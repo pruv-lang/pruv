@@ -1398,6 +1398,7 @@ must_reject|must_reject/lgaps9_str_bytes_len.pruv	2 cases: exit 2	llvm=bf5bcc882
 must_reject|must_reject/lgaps9_views_subview_len.pruv	2 cases: exit 2	llvm=0b37769bc998	rust=0b37769bc998
 must_reject|must_reject/lgaps9_views_subview_sum.pruv	2 cases: exit 2	llvm=27d244e74916	rust=27d244e74916
 must_reject|must_reject/p12a_inout_u8_entry.pruv	2 cases: exit 2	llvm=9dfab933044e	rust=9dfab933044e
+must_reject|must_reject/p12b_legacy_deferred.pruv	2 cases: exit 2	llvm=a4bddfb0b488	rust=a4bddfb0b488
 must_reject|must_reject/p12b_llvm_tuple.pruv	2 cases: exit 2	llvm=37d44418f7e6	rust=b3099f298c6e
 must_reject|must_reject/p1_add_overflow.pruv	2 cases: exit 2	llvm=bbdc5f856ac9	rust=bbdc5f856ac9
 must_reject|must_reject/p1_bit_and.pruv	2 cases: exit 2	llvm=1fca1e362b66	rust=1fca1e362b66

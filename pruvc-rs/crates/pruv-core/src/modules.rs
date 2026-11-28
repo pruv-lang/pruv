@@ -633,6 +633,13 @@ fn load_source_full(
 ) -> Result<Loaded, LoadError> {
     let root_file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let first = match crate::parser::parse_with_shapes(src, 0, None, true) {
+        // P12b: a deferred parse is a module file; a root with no `pub` and no `mod` is legacy and parses whole
+        Ok(f) if f.deferred.is_some() && !crate::parser::sniff_explicit(src) => {
+            match crate::parser::parse_with_shapes(src, 0, None, false) {
+                Ok(f) => f,
+                Err(e) => { set_files(Vec::new()); return Err(LoadError::Lang(e)); }
+            }
+        }
         Ok(f) => f,
         Err(mut e) => {
             set_files(Vec::new());

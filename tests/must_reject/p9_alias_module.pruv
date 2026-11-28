@@ -1,2 +1,2 @@
-// spec: R-6p-7 reject
+// spec: R-6v-1 reject
 pub type N = N;

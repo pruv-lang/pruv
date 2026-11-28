@@ -1,0 +1,20 @@
+{
+  "flags": [
+    "--no-verify"
+  ],
+  "run": {
+    "backends": [
+      "rust"
+    ],
+    "exit": 101,
+    "flags_matrix": [
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "0"
+    ],
+    "stderr_contains": "pruv: requires undefined: array index out of range"
+  }
+}

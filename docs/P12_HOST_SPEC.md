@@ -1,7 +1,7 @@
 # P12 host boundary: bundle plan and P12a design
 
-P12 opens the host boundary (the Rust API a Pruv program exposes, and the LLVM C ABI) for the types that today stop at
-`small_int_unsupported`, `tuple_module`/`const_module`/`alias_module`, `entry_signature`, `unsupported_type` and
+P12 opens the host boundary (the Rust API a Pruv program exposes, and the LLVM C ABI) for the types that stopped at
+`small_int_unsupported`, `tuple_module`/`const_module`/`alias_module` (lifted on the Rust backend by P12b, SPEC R-6p-7), `entry_signature`, `unsupported_type` and
 `tuple_llvm_owned`. The Rust backend goes first; LLVM follows per type family.
 
 P12a target: `pub fn reference(sid: [u16], ..)` compiles to a Rust wrapper a plain Rust caller calls as

@@ -77,6 +77,7 @@ pub(crate) fn parse_with_shapes(src: &str, tag: usize, shapes: Option<&ResolveSh
         tup_tmp: 0,
         pending: Vec::new(),
         consts: HashMap::new(),
+        in_head: false,
         fixed_ok: false,
         aliases: HashMap::new(),
         alias_busy: Vec::new(),
@@ -501,6 +502,8 @@ struct Parser<'a> {
     // ---- P7 constants ----
     /// evaluated module constants: name -> (type name, value); a use of the name parses as that literal
     consts: HashMap<String, (String, i128)>,
+    /// P12b: inside an if/while head an all-caps module path before `{}` is a constant, not an empty struct literal
+    in_head: bool,
     /// P7-1: the next `type_g` may read a fixed-length array (only a local `let` annotation for now, P7-1 A)
     fixed_ok: bool,
     // ---- P9 type aliases ----
@@ -2065,7 +2068,7 @@ impl Parser<'_> {
             let args = self.call_args()?;
             return Ok(Expr::Call(Call { line, col, name: path, args, ty: None, targs: None, inst: None, old: None, opaque_c: false }));
         }
-        if self.at("{", 0) && last_upper && (!const_path || self.at("}", 1) || self.at(":", 2)) {
+        if self.at("{", 0) && last_upper && (!const_path || (self.at("}", 1) && !self.in_head) || self.at(":", 2)) {
             let fields = self.struct_inits()?;
             return Ok(Expr::StructLit(StructLit { line, col, name: path, fields, ty: None, targs: None, inst: None }));
         }
@@ -3015,7 +3018,7 @@ impl Parser<'_> {
         self.expect("let")?;
         let mut arms = self.let_arms()?;
         self.expect("=")?;
-        let scr = self.expr()?;
+        let scr = self.head_expr()?;
         let body = self.block()?;
         arms.iter_mut().for_each(|a| a.body = body.clone());
         let mut els = Vec::new();
@@ -3259,13 +3262,13 @@ impl Parser<'_> {
                 self.bump();
                 let arms = self.let_arms()?;
                 self.expect("=")?;
-                Some((arms, self.expr()?))
+                Some((arms, self.head_expr()?))
             } else {
                 None
             };
             let cond = match head {
                 Some(_) => Expr::BoolLit(BoolLit { line: l, col: c, value: true, ty: None }),
-                None => self.expr()?,
+                None => self.head_expr()?,
             };
             let mut invs = Vec::new();
             let mut dec: Option<Expr> = None;
@@ -3665,9 +3668,17 @@ impl Parser<'_> {
         self.expr()
     }
 
+    /// The condition or scrutinee of an if/while head (P12b: see `in_head`).
+    fn head_expr(&mut self) -> R<Expr> {
+        let saved = std::mem::replace(&mut self.in_head, true);
+        let r = self.expr();
+        self.in_head = saved;
+        r
+    }
+
     fn if_(&mut self) -> R<If> {
         let t = self.expect_tok("if")?;
-        let cond = self.expr()?;
+        let cond = self.head_expr()?;
         let then = self.block()?;
         let mut els = Vec::new();
         if self.at("else", 0) {
@@ -3886,7 +3897,7 @@ impl Parser<'_> {
     fn value_if(&mut self) -> R<Expr> {
         self.enter(1)?;
         let t = self.next();
-        let cond = self.expr()?;
+        let cond = self.head_expr()?;
         let then = self.value_arm()?;
         if !self.at("else", 0) {
             let p = self.peek(0).clone();

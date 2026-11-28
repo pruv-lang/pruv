@@ -1,0 +1,2 @@
+// spec: R-6p-7 reject
+pub const LIMIT: i64 = 4;

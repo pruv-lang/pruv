@@ -1,0 +1,6 @@
+// spec: R-6p-7 reject
+mod a;
+pub fn f() -> i64 {
+  let a: [i64; crate::a::N] = [0; crate::a::N];
+  return a[0];
+}

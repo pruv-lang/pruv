@@ -1,0 +1,4 @@
+// spec: R-6p-7 reject
+mod a;
+const X: i64 = crate::a::LIMIT + 1;
+pub fn f() -> i64 { return X; }

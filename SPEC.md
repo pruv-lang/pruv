@@ -1407,7 +1407,8 @@ pub fn bounded(x: i64) -> i64                requires 0 <= x && x <= 10
 - **Visibility.** `pub` makes an item usable from every module. Fields and variants of a visible type are always
   visible. A public signature or contract may mention only public types and items (checked through field types too);
   a function a public contract calls directly must be `pub` (section 6, user functions in contracts);
-  private helpers are fine inside bodies. `pub trusted rust fn` is rejected: wrap it in a public Pruv function.
+  private helpers are fine inside bodies. A constant is a value, not an item a caller must see: a
+  public contract may use a private constant of its own module ([test](tests/spec/p12b_private_const_contract/root.pruv)). `pub trusted rust fn` is rejected: wrap it in a public Pruv function.
 - **Function attributes.** Write at most one of `#[cold]`, `#[inline]` or `#[inline(always)]` directly before a
   non-`pub` top-level `fn` item (generic fns allowed, any module). The attribute affects generated Rust (R-7-3);
   checking and verification are unchanged. Other attributes and arguments are `parse/unknown_attribute`.
@@ -3234,7 +3235,7 @@ fn is_digit(c: char) -> bool
   [mismatch](tests/must_reject/p7_const_mismatch.pruv), [division](tests/must_reject/p7_const_div_zero.pruv),
   [range](tests/must_reject/p7_const_neg_range.pruv), [char range](tests/must_reject/p7_const_char_range.pruv),
   [shadow](tests/must_reject/p7_const_shadow.pruv), [duplicate](tests/must_reject/p7_const_dup.pruv),
-  [pub](tests/must_reject/p7_const_pub.pruv), [lower case](tests/must_reject/p7_const_result.pruv),
+  [duplicate name](tests/must_reject/p7_const_pub.pruv), [lower case](tests/must_reject/p7_const_result.pruv),
   [for binder](tests/must_reject/p7_const_for_binder.pruv), [char from int](tests/must_reject/p7_const_char_int.pruv),
   [negative division](tests/must_reject/p7_const_neg_div.pruv).
 - R-6t-4 **Fixed-length arrays (values).** `[T; N]` is a local value type written in a `let` annotation;

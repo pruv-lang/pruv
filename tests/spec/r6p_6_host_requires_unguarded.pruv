@@ -1,0 +1,7 @@
+// spec: R-6p-6 accept
+// P12a follow-up: an unguarded element read in a host-entry `requires` (unverified) stops as undefined out of bounds
+pub fn mark_at(sid: [u16], i: u32) -> u32
+  requires i64(sid[i]) == 55296
+{
+  return i;
+}

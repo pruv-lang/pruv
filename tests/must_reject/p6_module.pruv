@@ -1,2 +1,2 @@
-// spec: R-6p-7 reject
+// spec: R-6s-1 reject
 pub fn f(x: i64) -> (i64,) { return (x,); }
