@@ -1,37 +1,37 @@
 # golden diff_trace.txt: diff_trace: Rust pruv-trace-dump trace per (group, input)
-bench_noinv|bench/inference/agg_noinv/p01.pruv	1 case: obl=8 1	default=0a224bb2d1c9
+bench_noinv|bench/inference/agg_noinv/p01.pruv	1 case: obl=8 1	default=d364c4dc1589
 bench_noinv|bench/inference/agg_noinv/p02.pruv	1 case: obl=13 1	default=5ee7c34f9388
 bench_noinv|bench/inference/agg_noinv/p03.pruv	1 case: obl=10 1	default=6bc0bd4f5967
 bench_noinv|bench/inference/agg_noinv/p04.pruv	1 case: obl=19 1	default=367598028cdf
 bench_noinv|bench/inference/agg_noinv/p05.pruv	1 case: obl=15 1	default=77134f37bafe
-bench_noinv|bench/inference/agg_noinv/p06.pruv	1 case: obl=18 1	default=6b538d3262df
+bench_noinv|bench/inference/agg_noinv/p06.pruv	1 case: obl=18 1	default=bde1b516da3b
 bench_noinv|bench/inference/agg_noinv/p07.pruv	1 case: obl=10 1	default=bfdce591b051
 bench_noinv|bench/inference/agg_noinv/p08.pruv	1 case: obl=11 1	default=682364a49f82
-bench_noinv|bench/inference/agg_noinv/p09.pruv	1 case: obl=16 1	default=c947cadf8811
+bench_noinv|bench/inference/agg_noinv/p09.pruv	1 case: obl=16 1	default=2c16c0f6c2d3
 bench_noinv|bench/inference/agg_noinv/p10.pruv	1 case: obl=4 1	default=a3a78e84bb8e
-bench_refine|bench/solutions/pruv_refine/p01.pruv	1 case: obl=15 1	default=45ddc36daa81
+bench_refine|bench/solutions/pruv_refine/p01.pruv	1 case: obl=15 1	default=6b60b5f38407
 bench_refine|bench/solutions/pruv_refine/p02.pruv	1 case: obl=28 1	default=80fc1c614cd6
 bench_refine|bench/solutions/pruv_refine/p03.pruv	1 case: obl=15 1	default=28d3c952ac5f
 bench_refine|bench/solutions/pruv_refine/p04.pruv	1 case: obl=33 1	default=fb9fbe631618
 bench_refine|bench/solutions/pruv_refine/p05.pruv	1 case: obl=32 1	default=393029c6e8f4
-bench_refine|bench/solutions/pruv_refine/p06.pruv	1 case: obl=73 1	default=cae35b5b6a8e
-bench_refine|bench/solutions/pruv_refine/p07.pruv	1 case: obl=21 1	default=cc3c6be5b789
+bench_refine|bench/solutions/pruv_refine/p06.pruv	1 case: obl=73 1	default=ac9be4708004
+bench_refine|bench/solutions/pruv_refine/p07.pruv	1 case: obl=21 1	default=e61b05b7fd7c
 bench_refine|bench/solutions/pruv_refine/p08.pruv	1 case: obl=18 1	default=591edd1659ea
-bench_refine|bench/solutions/pruv_refine/p09.pruv	1 case: obl=23 1	default=9e46cfc181f1
+bench_refine|bench/solutions/pruv_refine/p09.pruv	1 case: obl=23 1	default=9312f7942db6
 bench_refine|bench/solutions/pruv_refine/p10.pruv	1 case: obl=6 1	default=8c4ead6eae20
-bench|bench/solutions/pruv_agg/p01.pruv	1 case: obl=15 1	default=e307004cdc7d
+bench|bench/solutions/pruv_agg/p01.pruv	1 case: obl=15 1	default=8f72c1d2fdb9
 bench|bench/solutions/pruv_agg/p02.pruv	1 case: obl=28 1	default=80fc1c614cd6
 bench|bench/solutions/pruv_agg/p03.pruv	1 case: obl=15 1	default=28d3c952ac5f
 bench|bench/solutions/pruv_agg/p04.pruv	1 case: obl=33 1	default=fb9fbe631618
 bench|bench/solutions/pruv_agg/p05.pruv	1 case: obl=32 1	default=3bf999cb0da5
-bench|bench/solutions/pruv_agg/p06.pruv	1 case: obl=73 1	default=097ee6370cf7
-bench|bench/solutions/pruv_agg/p07.pruv	1 case: obl=21 1	default=cc3c6be5b789
+bench|bench/solutions/pruv_agg/p06.pruv	1 case: obl=73 1	default=bf70de687a8b
+bench|bench/solutions/pruv_agg/p07.pruv	1 case: obl=21 1	default=e61b05b7fd7c
 bench|bench/solutions/pruv_agg/p08.pruv	1 case: obl=18 1	default=591edd1659ea
-bench|bench/solutions/pruv_agg/p09.pruv	1 case: obl=23 1	default=94eab3d9239a
+bench|bench/solutions/pruv_agg/p09.pruv	1 case: obl=23 1	default=9eee3b9a23b2
 bench|bench/solutions/pruv_agg/p10.pruv	1 case: obl=6 1	default=6eb4c24c6c65
 check_edge|tests/check_edge/ok_all_ty.pruv	1 case: obl=2 1	default=79ce7f46749e
 check_edge|tests/check_edge/ok_arrays.pruv	1 case: obl=5 1	default=45e4ccbe2e47
-check_edge|tests/check_edge/ok_contract_agg.pruv	1 case: obl=15 1	default=279d48e010bb
+check_edge|tests/check_edge/ok_contract_agg.pruv	1 case: obl=15 1	default=a430e5d499da
 check_edge|tests/check_edge/ok_control_misc.pruv	1 case: obl=17 1	default=f7dc8e3aa53b
 check_edge|tests/check_edge/ok_effects.pruv	1 case: obl=2 1	default=b83da29b1e6c
 check_edge|tests/check_edge/ok_int_bounds.pruv	1 case: obl=1 1	default=275f91294102
@@ -49,7 +49,7 @@ examples|examples/g1_event.pruv	1 case: obl=11 1	default=ae3fa7b74294
 examples|examples/g1_point.pruv	1 case: obl=6 1	default=42f258cd427e
 examples|examples/g2a_bool_bounded.pruv	1 case: obl=2 1	default=b12086df3abf
 examples|examples/g2a_bool_build.pruv	1 case: obl=7 1	default=c832bf68fad6
-examples|examples/g2a_bool_count.pruv	1 case: obl=21 1	default=7a34bc02961f
+examples|examples/g2a_bool_count.pruv	1 case: obl=21 1	default=530fb88a6ff8
 examples|examples/g2a_bool_param_copy.pruv	1 case: obl=12 1	default=4c1052b861e4
 examples|examples/g2a_bool_sibling.pruv	1 case: obl=18 1	default=1d387bab2755
 examples|examples/g2a_u8_alloc_return.pruv	1 case: obl=2 1	default=e37ff13b9be1
@@ -105,23 +105,23 @@ examples|examples/g6_string_build.pruv	1 case: obl=3 1	default=1e7c8766049a
 examples|examples/g6_vec_running_sum.pruv	1 case: obl=20 1	default=779ee1b27a8b
 examples|examples/g7_disjoint.pruv	1 case: obl=15 1	default=61fb71659d76
 examples|examples/g7_shared_reads.pruv	1 case: obl=14 1	default=1af2cd174867
-examples|examples/g8_std_clamp.pruv	1 case: obl=175 1	default=01036a97c4a1
-examples|examples/g8_std_index.pruv	1 case: obl=179 1	default=db6042912ebf
+examples|examples/g8_std_clamp.pruv	1 case: obl=175 1	default=acd39a4c473f
+examples|examples/g8_std_index.pruv	1 case: obl=179 1	default=b0b75e855150
 examples|examples/g9_buffer_copy.pruv	1 case: obl=16 1	default=4971fc3579df
 examples|examples/g9_even_odd.pruv	1 case: obl=17 1	default=19a71fe5111f
 examples|examples/g9_json_build.pruv	1 case: obl=37 1	default=15cbbc966cd1
 examples|examples/g9_linked_struct.pruv	1 case: obl=24 1	default=9c0bbe15592e
 examples|examples/g9_parser.pruv	1 case: obl=38 1	default=1ea50016edd7
 examples|examples/g9_phase_measure.pruv	1 case: obl=15 1	default=cba678a291c2
-examples|examples/g9_suffix_scan.pruv	1 case: obl=41 1	default=44f8d7c12143
+examples|examples/g9_suffix_scan.pruv	1 case: obl=41 1	default=f5b31feab1df
 examples|examples/g9_tree_walk.pruv	1 case: obl=37 1	default=e132dd1ccb50
 examples|examples/p1_small_ints.pruv	1 case: obl=21 1	default=112a90892e62
 examples|examples/p2_u16_keys.pruv	1 case: obl=68 1	default=b01061c36005
 examples|examples/prefix.pruv	1 case: obl=21 1	default=8a190b7f812b
 examples|examples/sum.pruv	1 case: obl=10 1	default=448a441c7fae
-fuzz|fuzz:41	40 cases: obl=5 5, obl=6 4, obl=7 4, obl=2 3, ...	0/default=4e71239df357	1/default=751807aea832	2/default=4a23d2a5e4c5	3/default=6ef9dd4e0e73	4/default=09fa52bfd934	5/default=882917db0f55	6/default=46d42aef2ac5	7/default=199fdfa13c07	8/default=22e5d388e536	9/default=43c86948a17d	10/default=1d8f80182376	11/default=85dd5138a4e6	12/default=aa59b93c5c86	13/default=7b7549571d77	14/default=ae0f6b4f7b39	15/default=d7adfe17075a	16/default=d26118f22807	17/default=a86d41cb329f	18/default=be932601f9c2	19/default=670d1701a72d	20/default=88278f0dc7b2	21/default=c7c333522bca	22/default=5c31bdf579c3	23/default=4edd51f36b2b	24/default=2bb9068d41ad	25/default=4d16a5540922	26/default=af561b0b94a4	27/default=aaee9cc54090	28/default=01210dcb968e	29/default=e8c7469e366e	30/default=9156ff8f37b1	31/default=764ed0d1dfe6	32/default=93b61cec500f	33/default=c55df823fb31	34/default=bc8b6a1d3a2d	35/default=948e1caf49ff	36/default=212f371a3cc6	37/default=2e952e296fb0	38/default=3239d44300a7	39/default=afd7fb501300
-fuzz|fuzz:56	40 cases: obl=19 4, obl=20 4, obl=7 4, obl=10 3, ...	0/default=fdc7aea38ee2	1/default=6b17267ef607	2/default=0861bbc6035b	3/default=232dfa8f5e01	4/default=e20f93ec98d5	5/default=ccf01a354222	6/default=9dd84a4d230e	7/default=5b8d79886ba8	8/default=6e3a946001c9	9/default=bdd826139d04	10/default=8a0b81cab725	11/default=d49e8264f7fd	12/default=a266e336ada9	13/default=3dde5306d451	14/default=8301a2ba0e2e	15/default=8201a9fa36a2	16/default=b885f4dfd0af	17/default=626fe955b30c	18/default=87a6a0911611	19/default=d0c007c9655f	20/default=0b033d9c21ed	21/default=ffa1a6d8ac95	22/default=8375910fc6a3	23/default=53c614cd8d43	24/default=fdcaac17c255	25/default=d852b12fec0d	26/default=815897c19b72	27/default=1ee5fa4d7846	28/default=d18ffdc986aa	29/default=6434dfb4504d	30/default=95fbe34a5e68	31/default=a5f78c14c994	32/default=ab35abb303a8	33/default=f73cba398033	34/default=63738497fa11	35/default=b7f8e857598b	36/default=58ce2e78e096	37/default=fc1d27ca9e51	38/default=6345ef3b35af	39/default=63738497fa11
-fuzz|fuzz:57	40 cases: obl=6 6, obl=15 3, obl=19 3, obl=3 3, ...	0/default=002912c0dc61	1/default=3a1d24845003	2/default=ed96b8a73ad1	3/default=63738d64a34f	4/default=9a8a09c354f4	5/default=df0cdccf6a35	6/default=69211ebb771f	7/default=1fb49a106c51	8/default=f881f8433278	9/default=fce50ed475d3	10/default=bfd59692602f	11/default=77de4c9ef6a0	12/default=ea2ebd1eec76	13/default=b3529716c9a2	14/default=69a2fab4742a	15/default=8970a7eb8f1d	16/default=a86d41cb329f	17/default=fb48e158c36a	18/default=f1bee202df11	19/default=3dc57f8c24c6	20/default=ecb1846df4b1	21/default=9d7badc5e885	22/default=e52f0fae43a6	23/default=07a5ea0bf72b	24/default=d6748a998366	25/default=3eb182daf0ad	26/default=ed0d81fa15fc	27/default=7a5244f54046	28/default=f8850d326656	29/default=3ac94d0e0705	30/default=a7a4dbe5b690	31/default=39a8a2b8711f	32/default=d6d4c62801a1	33/default=3eb182daf0ad	34/default=1f1de5a6fe8f	35/default=773d61a7e79a	36/default=0589f8bcca1d	37/default=bab52588299b	38/default=a42101a2a8ef	39/default=c66c72655e76
+fuzz|fuzz:41	40 cases: obl=5 5, obl=6 4, obl=7 4, obl=2 3, ...	0/default=4e71239df357	1/default=751807aea832	2/default=043c71b17df4	3/default=6ef9dd4e0e73	4/default=09fa52bfd934	5/default=4e71239df357	6/default=81228a2d54a6	7/default=f05d9cd47f8c	8/default=de7f8cd04545	9/default=be1b649aba01	10/default=b20cb8fa8669	11/default=9ef511ba3ecf	12/default=3abdc2cb6244	13/default=b710229ffda7	14/default=ff67aae28d01	15/default=449b16ab64e8	16/default=b115af9ebab8	17/default=2434050f5250	18/default=3a1fb8e1384e	19/default=f05eed01f1e5	20/default=54a4121d79cc	21/default=f4d25813823f	22/default=704c12e7eec6	23/default=c380dc2eca1f	24/default=580bf5f7a963	25/default=1c98e73827ac	26/default=06af31ca3aa3	27/default=78ec3513a1fc	28/default=e1f1f501ace1	29/default=6bffb3d0d4c2	30/default=4c7312ea7129	31/default=efa608403a9a	32/default=17f3d053cd85	33/default=1d0742cbf8d4	34/default=20f0f38132da	35/default=3383674586af	36/default=9095844e0e2f	37/default=edb7530f0172	38/default=47309fe2f4e6	39/default=0e16726eece8
+fuzz|fuzz:56	40 cases: obl=19 4, obl=20 4, obl=7 4, obl=10 3, ...	0/default=fdc7aea38ee2	1/default=aced766cbcb5	2/default=0861bbc6035b	3/default=232dfa8f5e01	4/default=e20f93ec98d5	5/default=c15ec86ae21d	6/default=298016acdc1d	7/default=6a49da0d5245	8/default=67a1dc2415c9	9/default=fd434f126512	10/default=5c0eb3738782	11/default=58ec714b6e9f	12/default=b2563fcabd4b	13/default=fe02033ea119	14/default=4b0bcf6b8ecb	15/default=44f0d4c66ba7	16/default=128a629856bd	17/default=e9f2b27b34ab	18/default=1d8999f96122	19/default=d37dfd5c83c2	20/default=5fdb58680fdf	21/default=2bfc430136de	22/default=2f8fc13685a2	23/default=ccf376fbc6ff	24/default=d4998b0bf400	25/default=12bed22c3fb9	26/default=c04011d0df52	27/default=e66babbe6237	28/default=8633ea528566	29/default=8b6b02a82e0b	30/default=8191783eb7e0	31/default=a9df213dfcbc	32/default=fd51b6d73b63	33/default=8313d4d7e343	34/default=ccac2bd9f148	35/default=69f531f092e7	36/default=b82a3ba28466	37/default=9380c9a3f038	38/default=a47792e91145	39/default=ccac2bd9f148
+fuzz|fuzz:57	40 cases: obl=6 6, obl=15 3, obl=19 3, obl=3 3, ...	0/default=002912c0dc61	1/default=3a1d24845003	2/default=ed96b8a73ad1	3/default=63738d64a34f	4/default=9a8a09c354f4	5/default=f84eb7a4e2af	6/default=db235d548c96	7/default=d9c24ccf96fe	8/default=19f466ff25a6	9/default=17fb7959b1aa	10/default=95d868b5d245	11/default=f459427f2173	12/default=49dd519004eb	13/default=0252039e6f44	14/default=132500b2bae6	15/default=ffcbc65b8b34	16/default=2434050f5250	17/default=b4269ad8a47c	18/default=acddd5796d07	19/default=6b9ccae79859	20/default=55e60d00c6fb	21/default=775ab4eebb44	22/default=70dc516bc59c	23/default=7a441fc3ee73	24/default=a96c98fda73e	25/default=c52b1add250c	26/default=d4157dde3363	27/default=30183aca4ccb	28/default=02e0c891f646	29/default=6def017d7d61	30/default=3f88d2d363e4	31/default=77f7833b5cac	32/default=c04fe3802563	33/default=c52b1add250c	34/default=d686366c4f92	35/default=381ca06f6260	36/default=e646f95ed112	37/default=0ec23b1b094f	38/default=3da40207985c	39/default=527093ec0b89
 g4_reject|tests/must_reject/g4_lgaps20_fixed_module_oob/root.pruv	1 case: obl=3 1	default=54f640ced6e0
 g4_reject|tests/must_reject/g4_r01_missing_child/root.pruv	1 case: obl=0 1	default=d80c3151039c
 g4_reject|tests/must_reject/g4_r02_duplicate_module/root.pruv	1 case: obl=0 1	default=413332d85e13
@@ -264,8 +264,8 @@ g9|tests/g9/proof/p01_even_odd.pruv	1 case: obl=14 1	default=290018bd3871
 g9|tests/g9/proof/p02_ping_pong_phase.pruv	1 case: obl=12 1	default=a2490e4c0bfd
 g9|tests/g9/proof/p03_three_cycle_range.pruv	1 case: obl=22 1	default=e7f6180a3a2b
 g9|tests/g9/proof/p04_three_phase_count.pruv	1 case: obl=18 1	default=d6ad6385be42
-g9|tests/g9/proof/p05_sum_suffix.pruv	1 case: obl=15 1	default=2e1c4d598655
-g9|tests/g9/proof/p06_count_positive.pruv	1 case: obl=20 1	default=d98407f4bb03
+g9|tests/g9/proof/p05_sum_suffix.pruv	1 case: obl=15 1	default=4172eed24a0b
+g9|tests/g9/proof/p06_count_positive.pruv	1 case: obl=20 1	default=e6f7e2079cba
 g9|tests/g9/proof/p07_linear_search.pruv	1 case: obl=16 1	default=eae218f0ad95
 g9|tests/g9/proof/p08_tree_contains.pruv	1 case: obl=13 1	default=193c68f1d3b1
 g9|tests/g9/proof/p09_tree_node_total.pruv	1 case: obl=11 1	default=81aa36edd0c0
@@ -303,12 +303,12 @@ inference|tests/inference/inf_budget.pruv	1 case: obl=255 1	default=0c61d222d99e
 inference|tests/inference/inf_budget_fallback.pruv	1 case: obl=5 1	default=26d786552dc2
 inference|tests/inference/inf_copy_len.pruv	1 case: obl=7 1	default=94652b9d90d7
 inference|tests/inference/inf_count.pruv	1 case: obl=10 1	default=bfdce591b051
-inference|tests/inference/inf_dot.pruv	1 case: obl=16 1	default=c947cadf8811
+inference|tests/inference/inf_dot.pruv	1 case: obl=16 1	default=2c16c0f6c2d3
 inference|tests/inference/inf_early_return.pruv	1 case: obl=10 1	default=67e48169574c
 inference|tests/inference/inf_g2a_bool_sibling.pruv	1 case: obl=8 1	default=47cef72a3fe6
 inference|tests/inference/inf_g2a_infer_bool.pruv	1 case: obl=16 1	default=e009875dc082
-inference|tests/inference/inf_max.pruv	1 case: obl=12 1	default=e650a850dcef
-inference|tests/inference/inf_min.pruv	1 case: obl=12 1	default=b91263c257a8
+inference|tests/inference/inf_max.pruv	1 case: obl=12 1	default=bb367fe469f6
+inference|tests/inference/inf_min.pruv	1 case: obl=12 1	default=71713d8cdd3a
 inference|tests/inference/inf_nested.pruv	1 case: obl=12 1	default=43772ab84496
 inference|tests/inference/inf_prefix_copy.pruv	1 case: obl=10 1	default=bf8c3d16014d
 inference|tests/inference/inf_prefix_store.pruv	1 case: obl=11 1	default=68f928f87ca3
@@ -322,15 +322,15 @@ inference|tests/inference/inf_rej_call_in_term.pruv	1 case: obl=7 1	default=ec40
 inference|tests/inference/inf_rej_cond_index.pruv	1 case: obl=6 1	default=b9c38ad96da0
 inference|tests/inference/inf_rej_dependent.pruv	1 case: obl=13 1	default=c2a8cfdcf413
 inference|tests/inference/inf_rej_early_domain.pruv	1 case: obl=9 1	default=02ce66cf28b0
-inference|tests/inference/inf_rej_empty_max.pruv	1 case: obl=10 1	default=589354bc255d
+inference|tests/inference/inf_rej_empty_max.pruv	1 case: obl=10 1	default=6d086ff2918e
 inference|tests/inference/inf_rej_false_entry.pruv	1 case: obl=4 1	default=399f4f17542f
-inference|tests/inference/inf_rej_max_wrong.pruv	1 case: obl=12 1	default=1a9ed50a43a5
+inference|tests/inference/inf_rej_max_wrong.pruv	1 case: obl=12 1	default=86bb20b14bb6
 inference|tests/inference/inf_rej_nested_outer.pruv	1 case: obl=15 1	default=4bb97fe02d06
 inference|tests/inference/inf_rej_once.pruv	1 case: obl=9 1	default=7066e2612825
 inference|tests/inference/inf_rej_prefix_wrong_post.pruv	1 case: obl=11 1	default=db4c1f9b571c
 inference|tests/inference/inf_rej_range_wrong.pruv	1 case: obl=8 1	default=a7f7f20c80fd
-inference|tests/inference/inf_sum.pruv	1 case: obl=8 1	default=0a224bb2d1c9
-inference|tests/inference/inf_sum_offset.pruv	1 case: obl=16 1	default=062d211f5a94
+inference|tests/inference/inf_sum.pruv	1 case: obl=8 1	default=d364c4dc1589
+inference|tests/inference/inf_sum_offset.pruv	1 case: obl=16 1	default=8525029cd16b
 must_reject|tests/must_reject/cd01_requires_index.pruv	1 case: obl=1 1	default=b5bf191e66e6
 must_reject|tests/must_reject/cd02_requires_order.pruv	1 case: obl=1 1	default=b5bf191e66e6
 must_reject|tests/must_reject/cd03_div_zero.pruv	1 case: obl=1 1	default=26eb0c909caf
@@ -1182,7 +1182,7 @@ must_reject|tests/must_reject/lg36_move_under_outer_arm.pruv	1 case: obl=0 1	def
 must_reject|tests/must_reject/lg36_str_move_branch_read.pruv	1 case: obl=0 1	default=bae0b56a6036
 must_reject|tests/must_reject/lg36_str_move_in_loop.pruv	1 case: obl=0 1	default=709a588de845
 must_reject|tests/must_reject/lg36_str_move_under_outer_arm.pruv	1 case: obl=0 1	default=4e474e006bc5
-must_reject|tests/must_reject/lg4_agg_frame_changed.pruv	1 case: obl=23 1	default=567bc65ab999
+must_reject|tests/must_reject/lg4_agg_frame_changed.pruv	1 case: obl=23 1	default=ce8a0ec55514
 must_reject|tests/must_reject/lg4_field_index_immutable.pruv	1 case: obl=0 1	default=fa67285648a9
 must_reject|tests/must_reject/lg4_field_index_oob.pruv	1 case: obl=1 1	default=258f6e14f611
 must_reject|tests/must_reject/lg4_field_index_u8_range.pruv	1 case: obl=2 1	default=59cf0cc34f72
@@ -1932,7 +1932,7 @@ runtime|tests/runtime/g9_l11_payload_path_budget.pruv	1 case: obl=9 1	default=bd
 runtime|tests/runtime/g9_l12_ctor_operand_llvm.pruv	1 case: obl=6 1	default=e12376b00b87
 runtime|tests/runtime/g9_r01_scalar_recursion.pruv	1 case: obl=16 1	default=a6e2c6016da8
 runtime|tests/runtime/g9_r02_mutual_recursion.pruv	1 case: obl=32 1	default=ba999e387d81
-runtime|tests/runtime/g9_r03_array_recursion.pruv	1 case: obl=51 1	default=8439f54629a5
+runtime|tests/runtime/g9_r03_array_recursion.pruv	1 case: obl=51 1	default=2d1965fd8b15
 runtime|tests/runtime/g9_r04_tree_measures.pruv	1 case: obl=51 1	default=67fcf554a7fd
 runtime|tests/runtime/g9_r05_tree_sum.pruv	1 case: obl=25 1	default=f25b69cf8b22
 runtime|tests/runtime/g9_r06_mirror_clone.pruv	1 case: obl=12 1	default=8cc97d9cb988
@@ -2031,7 +2031,7 @@ runtime|tests/runtime/lg37_rt_move.pruv	1 case: obl=130 1	default=019ace64e7e5
 runtime|tests/runtime/lg3_rt_inout_struct.pruv	1 case: obl=29 1	default=a848c66a56bd
 runtime|tests/runtime/lg3_rt_take_field.pruv	1 case: obl=21 1	default=8ab3feea4474
 runtime|tests/runtime/lg3_rt_vec_reserve.pruv	1 case: obl=11 1	default=5cbf8e9b18de
-runtime|tests/runtime/lg4_rt_agg_frame.pruv	1 case: obl=32 1	default=d9c9d02ebd20
+runtime|tests/runtime/lg4_rt_agg_frame.pruv	1 case: obl=32 1	default=6d85b0a717f0
 runtime|tests/runtime/lg4_rt_field_index.pruv	1 case: obl=36 1	default=40881ff3f7c2
 runtime|tests/runtime/lg4_rt_move_array_field.pruv	1 case: obl=16 1	default=64ba674c2f5b
 runtime|tests/runtime/lg5_rt_copy_range_overlap.pruv	1 case: obl=67 1	default=861c1f0ea642

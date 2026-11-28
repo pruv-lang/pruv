@@ -322,7 +322,9 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
     counts that share an end point (`lo..m` and `m..hi`, or `lo..hi` and one of its parts), so a sum of two
     adjacent counts and the remainder of a count after its prefix both verify; it never invents a split point.
     Without `lo <= m <= hi` the fact is not used. Both verifiers try a query first without aggregate lemmas, then
-    with them, and add the split only in a third attempt (LG20). Tests: [split](tests/spec/r6_4_count_split.pruv),
+    with them, and add the split only in a third attempt (LG20). In the Rust verifier a query whose goal reads an
+    aggregate (other than a definedness goal) runs the lemma attempts first and the attempt without lemmas last
+    (L-gaps 23; the invariant search keeps the first order); each attempt is the same query, so only an attempt's resource limit can tell the orders apart. Tests: [split](tests/spec/r6_4_count_split.pruv),
     [split point not in the range](tests/spec/r6_4_count_split_unbounded.pruv).
   - Example: `ensures result == count(k in 0..len(a): a[k] < x)` with
     `invariant c == count(k in 0..i: a[k] < x)`.

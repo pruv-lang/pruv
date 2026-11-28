@@ -209,6 +209,33 @@ pred fn parents_ok(tape: [i64], lo: i64, hi: i64) -> bool {
         tape[6 * tape[6 * t + 4] + 1] < tape[6 * t + 1])));
 }
 
+// L-gaps 21 (4.4l-CT, G-DB33-2): records from..hi link to a parent at or after floor that encloses them (preorder
+// interval and source span), the parent half of json::doc_parents.
+pub pred fn contained(tape: [i64], from: i64, hi: i64, floor: i64) -> bool {
+  return forall t in from..hi: (floor <= tape[6 * t + 4] && tape[6 * t + 4] < t &&
+    t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] &&
+    tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2]);
+}
+// The children run of an open container: a record links to the open container (whose skip and end are not stored
+// yet) or to a later enclosing record.
+pred fn linked(tape: [i64], from: i64, hi: i64, open: i64) -> bool {
+  return forall t in from..hi: (tape[6 * t + 4] == open || (open < tape[6 * t + 4] && tape[6 * t + 4] < t &&
+    t < tape[6 * tape[6 * t + 4] + 3] && tape[6 * t + 3] <= tape[6 * tape[6 * t + 4] + 3] &&
+    tape[6 * tape[6 * t + 4] + 1] <= tape[6 * t + 1] && tape[6 * t + 2] <= tape[6 * tape[6 * t + 4] + 2]));
+}
+pred fn starts_from(tape: [i64], lo: i64, hi: i64, p: i64) -> bool {
+  return forall t in lo..hi: p <= tape[6 * t + 1];
+}
+// L-gaps 21 (G-DB33-1): the subtree facts of json::check_subtrees for records lo..hi, in its exact shapes (a count
+// aggregate is keyed by its body, so the shapes must match the consumer's).
+pub pred fn tree_ok(tape: [i64], lo: i64, hi: i64) -> bool {
+  return (forall t in lo..hi: (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && tape[6 * j + 1] >= tape[6 * t + 1] && tape[6 * j + 2] <= tape[6 * t + 2] && tape[6 * j + 3] <= tape[6 * t + 3] && tape[6 * j + 4] >= t))) &&
+    (forall t in lo..hi: (tape[6 * t] == 5 ==> (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && (tape[6 * j + 4] == t ==> tape[6 * j] != 7))))) &&
+    (forall t in lo..hi: (tape[6 * t] == 6 ==> (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && (tape[6 * j + 4] == t ==> ((tape[6 * j] == 7) == (count(k in t + 1..j: tape[6 * k + 4] == t) % 2 == 0))))))) &&
+    (forall t in lo..hi: (tape[6 * t] == 5 ==> (tape[6 * t + 3] <= len(tape) / 6 && tape[6 * t + 5] == count(k in t + 1..tape[6 * t + 3]: tape[6 * k + 4] == t)))) &&
+    (forall t in lo..hi: (tape[6 * t] == 6 ==> (tape[6 * t + 3] <= len(tape) / 6 && 2 * tape[6 * t + 5] == count(k in t + 1..tape[6 * t + 3]: tape[6 * k + 4] == t))));
+}
+
 // 4.4i-UF: the content of every string and key record (between its quotes) is valid UTF-8, proved from
 // `lex::scan_string`'s ensures. Consumers borrow a plain span as a `str` view with no run-time scan.
 pub pred fn strings_ok(input: [u8], tape: [i64], lo: i64, hi: i64) -> bool {
@@ -231,7 +258,11 @@ fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i6
   ensures is_ok(result) ==> strings_ok(input, tape, len(old(tape)) / 6, len(tape) / 6)
   ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
   ensures is_ok(result) ==> (tape[len(old(tape)) + 3] == len(tape) / 6 && tape[len(old(tape)) + 4] == parent && ((tape[len(old(tape))] == 7) == key))
-  decreases 3 * (129 - depth) + 2
+  ensures is_ok(result) ==> contained(tape, len(old(tape)) / 6 + 1, len(tape) / 6, len(old(tape)) / 6)
+  ensures is_ok(result) ==> tree_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures is_ok(result) ==> starts_from(tape, len(old(tape)) / 6, len(tape) / 6, old(pos))
+  ensures is_ok(result) ==> (forall q in 0..len(old(tape)) / 6: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q) + count(k in len(old(tape)) / 6..len(old(tape)) / 6 + 1: parent == q))
+  decreases 5 * (129 - depth) + 2
 {
   let end: i64 = len(input);
   crate::lex::skip_whitespace(input, inout pos, end);
@@ -288,7 +319,11 @@ fn open_container(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, d
   ensures is_ok(result) ==> strings_ok(input, tape, len(old(tape)) / 6, len(tape) / 6)
   ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
   ensures is_ok(result) ==> (tape[len(old(tape)) + 3] == len(tape) / 6 && tape[len(old(tape)) + 4] == parent && tape[len(old(tape))] == kind)
-  decreases 3 * (129 - depth) + 1
+  ensures is_ok(result) ==> contained(tape, len(old(tape)) / 6 + 1, len(tape) / 6, len(old(tape)) / 6)
+  ensures is_ok(result) ==> tree_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures is_ok(result) ==> starts_from(tape, len(old(tape)) / 6, len(tape) / 6, old(pos))
+  ensures is_ok(result) ==> (forall q in 0..len(old(tape)) / 6: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q) + count(k in len(old(tape)) / 6..len(old(tape)) / 6 + 1: parent == q))
+  decreases 5 * (129 - depth) + 1
 {
   let start: i64 = pos;
   pos = pos + 1;
@@ -298,16 +333,125 @@ fn open_container(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, d
   if depth == 128 { return Err::<(), crate::lex::Fault>(crate::lex::Fault { position: start, kind: 3 }); }
   append_record(inout tape, id, kind, start, pos, parent, 0);
   let children: i64 = container(input, inout pos, inout tape, id, depth + 1, kind == 6)?;
-  tape[base + 2] = pos;
-  tape[base + 3] = len(tape) / 6;
-  tape[base + 5] = children;
+  set_header(inout tape, id, start, pos, children, kind == 6);
+  return Ok::<(), crate::lex::Fault>(());
+}
+
+// L-gaps 22 (4.4l-CT): the three header fields of the container record id, written once its children are on the
+// tape. Only fields 2, 3 and 5 of record id change, so the child counts (over field 4) and the children's subtree
+// facts carry over; the ensures restate them over the stored tape, so open_container reads no aggregate across a
+// store, and add the facts of record id itself (tree_ok(id), the parent facts of its children).
+fn set_header(inout tape: [i64], id: i64, s: i64, e: i64, c: i64, object: bool) -> ()
+  requires 0 <= id && 6 * id + 6 <= len(tape) && len(tape) % 6 == 0 && len(tape) <= 6291456
+  requires tape[6 * id + 1] == s && s < e && ((tape[6 * id] == 6) == object) && (tape[6 * id] == 5 || tape[6 * id] == 6)
+  requires local_records(tape, id + 1, len(tape) / 6, e)
+  requires linked(tape, id + 1, len(tape) / 6, id)
+  requires tree_ok(tape, id + 1, len(tape) / 6)
+  requires starts_from(tape, id + 1, len(tape) / 6, s)
+  requires (object ==> 2 * c == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)) && (!object ==> c == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id))
+  requires !object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> tape[6 * j] != 7))
+  requires object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0))))
+  ensures len(tape) == len(old(tape))
+  ensures forall i in 0..len(tape): ((i != 6 * id + 2 && i != 6 * id + 3 && i != 6 * id + 5) ==> tape[i] == old(tape)[i])
+  ensures tape[6 * id + 2] == e && tape[6 * id + 3] == len(tape) / 6 && tape[6 * id + 5] == c
+  ensures forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(tape) / 6: old(tape)[6 * k + 4] == q)
+  ensures contained(tape, id + 1, len(tape) / 6, id)
+  ensures tree_ok(tape, id, len(tape) / 6)
+{
+  let b: i64 = 6 * id;
+  let m: i64 = len(tape) / 6;
+  tape[b + 2] = e;
+  tape[b + 3] = m;
+  tape[b + 5] = c;
+  assert count(k in id + 1..m: tape[6 * k + 4] == id) == count(k in id + 1..m: old(tape)[6 * k + 4] == id);
+  assert forall j in id + 1..m: (count(k in id + 1..j: tape[6 * k + 4] == id) == count(k in id + 1..j: old(tape)[6 * k + 4] == id));
+  assert tree_ok(tape, id + 1, m);
+  assert forall j in id + 1..tape[b + 3]: (j < len(tape) / 6 && tape[6 * j + 1] >= tape[b + 1] && tape[6 * j + 2] <= tape[b + 2] && tape[6 * j + 3] <= tape[b + 3] && tape[6 * j + 4] >= id);
+  assert !object ==> (forall j in id + 1..tape[b + 3]: (j < len(tape) / 6 && (tape[6 * j + 4] == id ==> tape[6 * j] != 7)));
+  assert object ==> (forall j in id + 1..tape[b + 3]: (j < len(tape) / 6 && (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0)))));
+  assert !object ==> (tape[b + 3] <= len(tape) / 6 && tape[b + 5] == count(k in id + 1..tape[b + 3]: tape[6 * k + 4] == id));
+  assert object ==> (tape[b + 3] <= len(tape) / 6 && 2 * tape[b + 5] == count(k in id + 1..tape[b + 3]: tape[6 * k + 4] == id));
+}
+
+// L-gaps 22 (4.4l-CT): `record` under the open container id, its count fact split into the other containers (the
+// count is unchanged) and id (one more child), the form `member` chains over its key and value.
+fn child(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64, key: bool) -> Result<(), crate::lex::Fault> ! alloc
+  requires 0 <= pos && pos <= len(input) && len(input) <= 16777216 && utf8_valid_span(input, 0, len(input))
+  requires 1 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
+  requires 0 <= id && 6 * id + 6 <= len(tape) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < pos
+  ensures old(pos) <= pos && pos <= len(input)
+  ensures len(tape) >= len(old(tape)) && len(tape) % 6 == 0 && len(tape) <= 6291456
+  ensures is_ok(result) ==> (pos > old(pos) && len(tape) > len(old(tape)))
+  ensures forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
+  ensures is_ok(result) ==> local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
+  ensures is_ok(result) ==> parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures is_ok(result) ==> strings_ok(input, tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
+  ensures is_ok(result) ==> (tape[len(old(tape)) + 3] == len(tape) / 6 && tape[len(old(tape)) + 4] == id && ((tape[len(old(tape))] == 7) == key))
+  ensures is_ok(result) ==> contained(tape, len(old(tape)) / 6 + 1, len(tape) / 6, len(old(tape)) / 6)
+  ensures is_ok(result) ==> tree_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures is_ok(result) ==> starts_from(tape, len(old(tape)) / 6, len(tape) / 6, old(pos))
+  ensures is_ok(result) ==> (forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q))
+  ensures is_ok(result) ==> count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id) == count(k in id + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == id) + 1
+  decreases 5 * (129 - depth) + 3
+{
+  return record(input, inout pos, inout tape, id, depth, key);
+}
+
+// L-gaps 22 (4.4l-CT): one child of the open container id (a key, `:` and a value for an object), the loop step of
+// `container`. The ensures restate the child-count, parity and frame facts over the stored tape against the tape
+// before the step, so the loop chains one equation per iteration instead of reading aggregates across two calls.
+fn member(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64, object: bool, children: i64, from: i64) -> Result<(), crate::lex::Fault> ! alloc
+  requires 0 <= pos && pos <= len(input) && len(input) <= 16777216 && utf8_valid_span(input, 0, len(input))
+  requires 1 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
+  requires 0 <= id && 6 * id + 6 <= len(tape) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < from && from <= pos
+  requires linked(tape, id + 1, len(tape) / 6, id)
+  requires tree_ok(tape, id + 1, len(tape) / 6)
+  requires starts_from(tape, id + 1, len(tape) / 6, from)
+  requires (object ==> 2 * children == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)) && (!object ==> children == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id))
+  requires !object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> tape[6 * j] != 7))
+  requires object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0))))
+  ensures old(pos) <= pos && pos <= len(input)
+  ensures len(tape) >= len(old(tape)) && len(tape) % 6 == 0 && len(tape) <= 6291456
+  ensures forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
+  ensures is_ok(result) ==> pos > old(pos)
+  ensures is_ok(result) ==> local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
+  ensures is_ok(result) ==> parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures is_ok(result) ==> strings_ok(input, tape, len(old(tape)) / 6, len(tape) / 6)
+  ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
+  ensures is_ok(result) ==> linked(tape, id + 1, len(tape) / 6, id)
+  ensures is_ok(result) ==> tree_ok(tape, id + 1, len(tape) / 6)
+  ensures is_ok(result) ==> starts_from(tape, id + 1, len(tape) / 6, from)
+  ensures is_ok(result) ==> (forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q))
+  ensures is_ok(result) ==> ((object ==> 2 * children + 2 == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)) && (!object ==> children + 1 == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)))
+  ensures is_ok(result) ==> (!object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> tape[6 * j] != 7)))
+  ensures is_ok(result) ==> (object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0)))))
+  decreases 5 * (129 - depth) + 4
+{
+  let end: i64 = len(input);
+  if object {
+    child(input, inout pos, inout tape, id, depth, true)?;
+    crate::lex::skip_whitespace(input, inout pos, end);
+    if pos == end { return Err::<(), crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
+    if input[pos] != 58 { return Err::<(), crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 8 }); }
+    pos = pos + 1;
+    assert len(tape) == len(old(tape)) + 6 && tape[len(old(tape)) + 4] == id && tape[len(old(tape))] == 7;
+    assert count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id) == 2 * children + 1;
+    assert forall j in id + 1..len(old(tape)) / 6 + 1: count(k in id + 1..j: tape[6 * k + 4] == id) == count(k in id + 1..j: old(tape)[6 * k + 4] == id);
+    assert forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0)));
+  }
+  let m1: i64 = len(tape) / 6;
+  child(input, inout pos, inout tape, id, depth, false)?;
+  assert tape[6 * m1 + 4] == id && tape[6 * m1] != 7;
+  assert forall j in m1 + 1..len(tape) / 6: tape[6 * j + 4] != id;
+  assert forall j in id + 1..len(old(tape)) / 6 + 1: count(k in id + 1..j: tape[6 * k + 4] == id) == count(k in id + 1..j: old(tape)[6 * k + 4] == id);
   return Ok::<(), crate::lex::Fault>(());
 }
 
 fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64, object: bool) -> Result<i64, crate::lex::Fault> ! alloc
   requires 0 <= pos && pos <= len(input) && len(input) <= 16777216 && utf8_valid_span(input, 0, len(input))
   requires 1 <= depth && depth <= 128 && len(tape) % 6 == 0 && len(tape) <= 6291456
-  requires 0 <= id && 6 * id < len(tape) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < pos
+  requires 0 <= id && len(tape) == 6 * id + 6 && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < pos
   ensures old(pos) <= pos && pos <= len(input)
   ensures len(tape) >= len(old(tape)) && len(tape) % 6 == 0 && len(tape) <= 6291456
   ensures forall i in 0..len(old(tape)): tape[i] == old(tape)[i]
@@ -315,8 +459,16 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
   ensures is_ok(result) ==> parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
   ensures is_ok(result) ==> strings_ok(input, tape, len(old(tape)) / 6, len(tape) / 6)
   ensures !is_ok(result) ==> (0 <= err_val(result).position && err_val(result).position <= len(input))
-  decreases 3 * (129 - depth) + 3
+  ensures is_ok(result) ==> linked(tape, id + 1, len(tape) / 6, id)
+  ensures is_ok(result) ==> tree_ok(tape, id + 1, len(tape) / 6)
+  ensures is_ok(result) ==> starts_from(tape, id + 1, len(tape) / 6, old(pos))
+  ensures is_ok(result) ==> (forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q))
+  ensures is_ok(result) ==> ((object ==> 2 * ok_val(result) == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)) && (!object ==> ok_val(result) == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)))
+  ensures is_ok(result) ==> (!object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> tape[6 * j] != 7)))
+  ensures is_ok(result) ==> (object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0)))))
+  decreases 5 * (129 - depth) + 5
 {
+  let from: i64 = pos;
   let end: i64 = len(input);
   let mut close: i64 = 93;
   if object { close = 125; }
@@ -333,18 +485,18 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
     invariant local_records(tape, len(old(tape)) / 6, len(tape) / 6, pos)
     invariant parents_ok(tape, len(old(tape)) / 6, len(tape) / 6)
     invariant strings_ok(input, tape, len(old(tape)) / 6, len(tape) / 6)
-    invariant 0 <= id && 6 * id < len(old(tape)) && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < old(pos)
+    invariant 0 <= id && len(old(tape)) == 6 * id + 6 && (tape[6 * id] == 5 || tape[6 * id] == 6) && tape[6 * id + 1] < old(pos)
+    invariant linked(tape, id + 1, len(tape) / 6, id)
+    invariant tree_ok(tape, id + 1, len(tape) / 6)
+    invariant starts_from(tape, id + 1, len(tape) / 6, old(pos))
+    invariant forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q)
+    invariant (object ==> 2 * children == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)) && (!object ==> children == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id))
+    invariant !object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> tape[6 * j] != 7))
+    invariant object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0))))
     invariant 0 <= children && children <= pos
     decreases end - pos + 1
   {
-    if object {
-      record(input, inout pos, inout tape, id, depth, true)?;
-      crate::lex::skip_whitespace(input, inout pos, end);
-      if pos == end { return Err::<i64, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
-      if input[pos] != 58 { return Err::<i64, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 8 }); }
-      pos = pos + 1;
-    }
-    record(input, inout pos, inout tape, id, depth, false)?;
+    member(input, inout pos, inout tape, id, depth, object, children, from)?;
     children = children + 1;
     crate::lex::skip_whitespace(input, inout pos, end);
     if pos == end { return Err::<i64, crate::lex::Fault>(crate::lex::Fault { position: pos, kind: 5 }); }
@@ -371,6 +523,8 @@ fn scan_records(input: [u8], inout tape: [i64], object: bool) -> Result<(), crat
   ensures is_ok(result) ==> parents_ok(tape, 0, len(tape) / 6)
   ensures is_ok(result) ==> strings_ok(input, tape, 0, len(tape) / 6)
   ensures is_ok(result) ==> (tape[4] == -1 && tape[3] == len(tape) / 6 && tape[0] != 7)
+  ensures is_ok(result) ==> contained(tape, 1, len(tape) / 6, 0)
+  ensures is_ok(result) ==> tree_ok(tape, 0, len(tape) / 6)
   ensures (is_ok(result) && object) ==> tape[0] == 6
 {
   let n: i64 = len(input);
@@ -403,6 +557,8 @@ pub fn scan(input: [u8]) -> Checked ! alloc
   ensures is_variant(result, Checked::Tape) ==> (forall t in 0..len(variant_field(result, Checked::Tape, tape)) / 6: (t == 0 ==> (variant_field(result, Checked::Tape, tape)[6 * t + 4] == -1 && variant_field(result, Checked::Tape, tape)[6 * t + 3] == len(variant_field(result, Checked::Tape, tape)) / 6 && variant_field(result, Checked::Tape, tape)[6 * t] != 7)))
   ensures is_variant(result, Checked::Tape) ==> (forall t in 0..len(variant_field(result, Checked::Tape, tape)) / 6: (t > 0 ==> (0 <= variant_field(result, Checked::Tape, tape)[6 * t + 4] && variant_field(result, Checked::Tape, tape)[6 * t + 4] < t && (variant_field(result, Checked::Tape, tape)[6 * variant_field(result, Checked::Tape, tape)[6 * t + 4]] == 5 || variant_field(result, Checked::Tape, tape)[6 * variant_field(result, Checked::Tape, tape)[6 * t + 4]] == 6) && variant_field(result, Checked::Tape, tape)[6 * variant_field(result, Checked::Tape, tape)[6 * t + 4] + 1] < variant_field(result, Checked::Tape, tape)[6 * t + 1])))
   ensures is_variant(result, Checked::Tape) ==> (forall t in 0..len(variant_field(result, Checked::Tape, tape)) / 6: ((variant_field(result, Checked::Tape, tape)[6 * t] <= 4 || variant_field(result, Checked::Tape, tape)[6 * t] == 7) ==> (variant_field(result, Checked::Tape, tape)[6 * t + 5] == 0 || (variant_field(result, Checked::Tape, tape)[6 * t + 5] == 1 && (variant_field(result, Checked::Tape, tape)[6 * t] == 4 || variant_field(result, Checked::Tape, tape)[6 * t] == 7)))))
+  ensures is_variant(result, Checked::Tape) ==> contained(variant_field(result, Checked::Tape, tape), 1, len(variant_field(result, Checked::Tape, tape)) / 6, 0)
+  ensures is_variant(result, Checked::Tape) ==> tree_ok(variant_field(result, Checked::Tape, tape), 0, len(variant_field(result, Checked::Tape, tape)) / 6)
 {
   let mut tape: [i64] = alloc(0, 0);
   let root: Result<(), crate::lex::Fault> = scan_records(input, inout tape, false);

@@ -2831,3 +2831,30 @@ decision and a spec review). The arity link in `agg_frame` is the part to keep.
   before the stores. Optional, not done: a pop rooted at a `vec_at_mut` binder and a pop through a boxed middle field
   have no test (code path read as right).
 - Measured (row 2, side branch): `work/lgaps22/perf_cells.json`.
+
+## L-gaps 23: aggregate goals start at the lemma stage, G-DB33-1/2 attempt (4.4l-CT, kept on this branch)
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4l-CT (G-DB33-1/2) | proof gap, open (time) | Branch `lair/pruv-l-gaps-23-co-1258`, not merged. Takes the L-gaps 22 side-branch sources (`set_header`, `child`, `member`; `lines::parse_owned` no longer calls `json::check_subtrees`) and the `agg_frame` arity link from 7df89c86. Verifier change (SPEC R-6-4): in `prove_core_cand` a query whose goal applies an aggregate function (`agg_goal`: aggregate lemmas exist and the goal reads one of `self.aggs`; `contract_domain` / `variant_domain` keep the old order) runs stage 1 (aggregate lemmas), then stage 2 (count split) if there are split lemmas, and stage 0 (no lemmas) last; the relaxed counterexample still comes from the stage-0 model. Other goals and the invariant search (`probe_attempts`: a timeout there ends the whole search and every attempt spends the shared budget, so the order is not neutral) keep 0, 1, 2. Result: a5_root with the new sources passes three fresh-cache runs at 17.61 / 17.57 / 17.47 s (side-branch compiler 30-34 s); main sources 7.96 / 7.42 / 7.42 s against 8.39 / 7.32 / 7.48 s for the main compiler. Target (fresh a5_root within 20 % of 7.3 s, about 8.8 s) not met: the extra time is the new proofs themselves (about 15 s of solver time against 4 s; top: `child` ensures stage 1 1.9 s, `member` ensures 1.2 + 0.55 s, `set_header` ensures 1.1 s, `container` ensures 1.0 s and invariant 0.6 s, `record` contract_domain 0.56 s) | spike_smoke trace order (at most one lemmas=false attempt, first or last); trace goldens `diff_trace.txt` (135 keys) and `diff_trace_infer.txt` (157 keys) rewritten for the attempt order |
+
+Next direction for 4.4l-CT: the cost is in the obligations, not in the stage order now. Either restructure the proof
+so the heavy postconditions (`child`, `member`, `set_header`) are smaller steps the solver closes quickly, or add a
+language feature that hides the `forall` / `count` bodies of the tree predicates from callers (`opaque` on `pred fn`;
+only `opaque fn` exists), so each helper only sees the predicate it needs.
+
+- Stage order check: `work/lgaps23/aggcmp.json`, 103 samples under `examples/` and `tests/` that read an aggregate,
+  base vs new: same exit code and error codes / lines everywhere, 7 counterexample values differ, total verify time
+  14.49 s -> 9.37 s. Every trace golden mismatch was rerun with both compilers (`work/lgaps23/tracecmp_*.txt`): same
+  obligations and per-obligation verdicts; 13 cases differ only in counterexample values.
+- json run_a0..a4 with the main sources: base and new within 2 %; with the new sources the roots that verify
+  `pkgs/parse` take about 10 s more (a2 6.9 -> 17.0 s, a3 8.2 -> 21.6 s, a4 10.7 -> 20.2 s). l3_frontend 96/96 both.
+- Checks: `--backend both` must_reject 1423/1423, l3_frontend 96/96, examples 494/494, runtime 3617/3617,
+  g4_proof 10/10, g4b_proof 2/2, g8_proof 35/35, g9_proof 38/38; `cargo test --release` passed; `diff_rust
+  --fuzz-count 20` ok; `m3_all --quick` ok after the trace golden update; `--list-rows` unchanged.
+- L3 (final compiler, rs/llvm): claude a0-a4, json run_a0-a5, supervisor a0-a3, grok, qwen, mcp, codex, opencode
+  all pass. Final a5_root fresh: 18.17 / 17.47 s against 7.46 / 7.36 s for the main compiler and sources.
+- Review A (Codex gpt-6.2-astra high, spec vs encoding): required, fixed: the first version also reordered
+  `probe_attempts`; reverted to 0, 1, 2. Fix-check: one required item, fixed (the LG31 comment on which attempt's
+  status `frame_failed` stores for an aggregate goal); `probe_attempts` behaves as before.
+- Measured: `work/lgaps23/` (a5_root_times.txt, json_a*_times.txt, aggcmp.json, NOTES.md).

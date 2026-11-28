@@ -2746,7 +2746,37 @@ impl<'a> FnVerifier<'a> {
         let arity = 2 + ps.len();
         let mut new_lemmas = Vec::new();
         for (kind2, f2, tc2, shape2, arity2) in self.agg_shapes.iter() {
-            if kind2 != kind || *arity2 != arity || *shape2 != shape {
+            if kind2 != kind {
+                continue;
+            }
+            if *arity2 != arity {
+                // L-gaps 22 (4.4l-CT): a plain aggregate (no outer variable, `count(k in a..b: t[k] == id)`) whose
+                // body is the body of one over enclosing quantifier variables (`forall q: count(k in a..b: t[k] ==
+                // q)`) at ground values `c` of those variables is that aggregate at `c`: `G(x, y) == F(x, y, c)`.
+                // So an instance `q == id` of a quantified fact meets the plain aggregate.
+                let (plain, pf, general, gf, n) = if *arity2 == 2 {
+                    (tc2, f2, tc, f, arity - 2)
+                } else if arity == 2 {
+                    (tc, f, tc2, f2, *arity2 - 2)
+                } else {
+                    continue;
+                };
+                let gps: Vec<Ast> = (0..n).map(|i| z.int_const(&format!("agg!p{}", i))).collect();
+                let mut cs: Vec<Option<Ast>> = vec![None; n];
+                if !bind_params(general, plain, &gps, k0, &mut cs) || cs.iter().any(|c| c.is_none()) {
+                    continue;
+                }
+                let x = z.int_const("aggf!x");
+                let y = z.int_const("aggf!y");
+                let mut gargs = vec![x.clone(), y.clone()];
+                gargs.extend(cs.into_iter().flatten());
+                let a1 = pf.apply(&[x.clone(), y.clone()]);
+                let a2 = gf.apply(&gargs);
+                let bound = vec![x.clone(), y.clone()];
+                new_lemmas.push(z.forall_groups(&bound, &a1.eq(&a2), &[vec![&a1], vec![&a2]]));
+                continue;
+            }
+            if *shape2 != shape {
                 continue;
             }
             let x = z.int_const("aggf!x");
@@ -7226,6 +7256,34 @@ fn arr_shape(t: &Ast) -> String {
         return format!("({} {})", t.decl_name().unwrap_or_default(), parts.join(" "));
     }
     t.sexpr()
+}
+
+/// L-gaps 22: does `plain` equal `general` with each outer parameter `ps[i]` replaced by one ground term `out[i]`
+/// (free of the aggregate index `k0`)? Fills `out`.
+fn bind_params(general: &Ast, plain: &Ast, ps: &[Ast], k0: &Ast, out: &mut [Option<Ast>]) -> bool {
+    if let Some(i) = ps.iter().position(|p| p.id() == general.id()) {
+        if plain.occurs(k0) {
+            return false;
+        }
+        return match &out[i] {
+            Some(c) => c.id() == plain.id(),
+            None => {
+                out[i] = Some(plain.clone());
+                true
+            }
+        };
+    }
+    if general.id() == plain.id() {
+        return true;
+    }
+    let (gc, pc) = (general.children(), plain.children());
+    if !general.is_app() || !plain.is_app() || gc.is_empty() || gc.len() != pc.len() {
+        return false;
+    }
+    if general.decl_name() != plain.decl_name() || general.sort().sexpr() != plain.sort().sexpr() {
+        return false;
+    }
+    gc.iter().zip(pc.iter()).all(|(g, p)| bind_params(g, p, ps, k0, out))
 }
 
 /// P7-1 B: the integer width of a fixed array's element type (None for bool and for other arrays)

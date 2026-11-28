@@ -884,6 +884,35 @@ impl Ast {
         }
         false
     }
+
+    /// L-gaps 23: does an application of a function named in `names` (with at least one argument) occur within
+    /// `self` (descending into quantifier bodies and triggers, as `occurs`)?
+    pub fn applies_any(&self, names: &HashSet<&str>) -> bool {
+        let mut seen: HashSet<u32> = HashSet::new();
+        let mut todo: Vec<Ast> = vec![self.clone()];
+        while let Some(n) = todo.pop() {
+            if !seen.insert(n.id()) {
+                continue;
+            }
+            match n.kind() {
+                K_APP => {
+                    let na = n.num_args();
+                    if na > 0 && n.decl_name().map_or(false, |d| names.contains(d.as_str())) {
+                        return true;
+                    }
+                    for i in 0..na {
+                        todo.push(n.arg(i));
+                    }
+                }
+                K_QUANTIFIER => {
+                    todo.push(n.body());
+                    todo.extend(n.pattern_terms());
+                }
+                _ => {}
+            }
+        }
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -19,6 +19,7 @@
 use pruv_core::diagnostic::PruvError;
 use pruv_core::pyjson::Json;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 use crate::symbolic::{Env, FnVerifier, Pos, State, Val};
 use crate::sys::{Ast, Sat, Solver, ZModel};
@@ -309,35 +310,60 @@ impl<'a> FnVerifier<'a> {
             self.probe_attempts(&st.pc, g, ob, code, cand.unwrap_or(""), idx);
             return;
         }
-        // First without the aggregate lemmas: assumptions are few, so unsat here is a sound proof,
-        // and it drops the quantified lemmas for the many obligations that do not need them
-        let (mut sol, mut r) = self.run_attempt(&st.pc, g, ob, 0, idx);
-        if r == Sat::Unsat {
-            return;
-        }
         let mut relaxed: Option<Vec<(String, Json)>> = None;
-        if !self.lemmas.is_empty() {
-            if r == Sat::Sat {
-                relaxed = Some(self.cex(&sol.model(), &st.env));
-            }
-            let (s2, r2) = self.run_attempt(&st.pc, g, ob, 1, idx);
-            sol = s2;
-            r = r2;
+        let (mut sol, mut r);
+        if self.agg_goal(ob, code) {
+            // L-gaps 23: a goal that reads an aggregate starts with the lemmas (stage 1, then 2), so it does not spend
+            // the stage-0 limit failing first. Stage 0 then runs last, only when the last lemma stage found no model:
+            // its unsat is still a proof and its model is the relaxed counterexample, so the verdict, the error and
+            // the reported reason (from the last lemma stage) are those of the 0, 1, 2 order. After a lemma stage
+            // model stage 0 is not run: it asserts a subset, so it has that model too and is not unsat.
+            (sol, r) = self.run_attempt(&st.pc, g, ob, 1, idx);
             if r == Sat::Unsat {
                 return;
             }
             if !self.split_lemmas.is_empty() {
-                // LG20 (G-LG19-4): the count range split only when the other lemmas are not enough (verify.py)
-                let (s3, r3) = self.run_attempt(&st.pc, g, ob, 2, idx);
-                sol = s3;
-                r = r3;
+                (sol, r) = self.run_attempt(&st.pc, g, ob, 2, idx);
                 if r == Sat::Unsat {
                     return;
                 }
             }
+            if r != Sat::Sat {
+                let (s0, r0) = self.run_attempt(&st.pc, g, ob, 0, idx);
+                if r0 == Sat::Unsat {
+                    return;
+                }
+                if r0 == Sat::Sat {
+                    relaxed = Some(self.cex(&s0.model(), &st.env));
+                }
+            }
+        } else {
+            // First without the aggregate lemmas: assumptions are few, so unsat here is a sound proof,
+            // and it drops the quantified lemmas for the many obligations that do not need them
+            (sol, r) = self.run_attempt(&st.pc, g, ob, 0, idx);
+            if r == Sat::Unsat {
+                return;
+            }
+            if !self.lemmas.is_empty() {
+                if r == Sat::Sat {
+                    relaxed = Some(self.cex(&sol.model(), &st.env));
+                }
+                (sol, r) = self.run_attempt(&st.pc, g, ob, 1, idx);
+                if r == Sat::Unsat {
+                    return;
+                }
+                if !self.split_lemmas.is_empty() {
+                    // LG20 (G-LG19-4): the count range split only when the other lemmas are not enough (verify.py)
+                    (sol, r) = self.run_attempt(&st.pc, g, ob, 2, idx);
+                    if r == Sat::Unsat {
+                        return;
+                    }
+                }
+            }
         }
         // LG31: a failing loop frame clause obligation reports no error: remember the candidate (first failure wins; the
-        // status is that of the last attempt, as the trace records it), and leave `seen` untouched.
+        // status is that of the last attempt for other goals, as the trace records it; for an aggregate goal it is that of
+        // the last lemma stage, while the trace may end with the stage-0 attempt), and leave `seen` untouched.
         if let Some(c) = cand.filter(|c| c.starts_with('F')) {
             if !self.frame_failed.iter().any(|(id, _)| id == c) {
                 let reason = if r == Sat::Unknown { Some(sol.reason_unknown()) } else { None };
@@ -412,6 +438,9 @@ impl<'a> FnVerifier<'a> {
     /// Python's z3.Z3Exception → status "error" branch is not ported: Rust's `Solver::check` does not throw exceptions.
     fn probe_attempts(&mut self, pc: &[Ast], g: &[Ast], ob: &Ast, code: &str, cand: &str, idx: Option<usize>) {
         let mut status = String::new();
+        // L-gaps 23: kept in the 0, 1, 2 order of `prove_core_cand` before L-gaps 23. In a search the order is not
+        // neutral: a stage that hits the per-query timeout aborts the whole function, and each attempt spends the
+        // shared budget (`Probe::tick`), so a lemma stage first could end a search the old order finishes.
         for stage in [0u8, 1, 2] {
             if (stage >= 1 && self.lemmas.is_empty()) || (stage == 2 && self.split_lemmas.is_empty()) {
                 break;
@@ -439,6 +468,18 @@ impl<'a> FnVerifier<'a> {
         if let Some(p) = self.probe.as_mut() {
             p.failed.insert(cand.to_string(), (code.to_string(), status));
         }
+    }
+
+    /// L-gaps 23: does the goal read an aggregate (`sum`/`count`/`max`/`min` function) while aggregate lemmas exist?
+    /// Such a goal starts at the lemma stage (`prove_core_cand`; the invariant search keeps the old order). Definedness
+    /// goals (`contract_domain`, `variant_domain`) keep the old order too: they are many and mostly prove at stage 0,
+    /// even when one reads an aggregate (a divisor that is a `sum`).
+    fn agg_goal(&self, ob: &Ast, code: &str) -> bool {
+        if self.lemmas.is_empty() || self.aggs.is_empty() || code == "contract_domain" || code == "variant_domain" {
+            return false;
+        }
+        let names: HashSet<&str> = self.aggs.iter().map(|(_, f)| f.name()).collect();
+        ob.applies_any(&names)
     }
 
     /// verify.py inner `run(with_lemmas)` (lines 258-269): (solver, verdict).
