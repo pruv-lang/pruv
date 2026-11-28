@@ -1,0 +1,16 @@
+// spec: R-6g9-17 reject
+struct Doc { source: ref [u8], tape: [i64] }
+enum E { Hit(code: i64, doc: Doc), Skip }
+fn make(data: [u8]) -> E from(data) ! alloc {
+  let tape: [i64] = alloc(1, 9);
+  let doc: Doc = Doc { source: data, tape: move tape };
+  return E::Hit(3, move doc);
+}
+pub fn checksum() -> i64 ! alloc {
+  let mut data: [u8] = alloc(1, 7);
+  let e: E = make(data);
+  match e {
+    E::Hit(k, d) => { data = truncate(data, 0); return len(d.source); }
+    E::Skip => { return 0; }
+  }
+}

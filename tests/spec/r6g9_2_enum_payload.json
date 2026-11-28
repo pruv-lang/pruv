@@ -1,1 +1,23 @@
-{"stage": "type", "code": "borrow_signature", "line": 4, "col": 12}
+{
+  "gen_contains": [
+    "enum Line<'a>",
+    "fn line<'a>(data: &'a [u8]) -> Line<'a>"
+  ],
+  "gen_absent": [
+    "to_vec()",
+    ".clone()"
+  ],
+  "run": {
+    "exit": 0,
+    "flags_matrix": [
+      [],
+      [
+        "--no-verify"
+      ]
+    ],
+    "stdout_lines": [
+      "16"
+    ],
+    "alloc_balance": true
+  }
+}

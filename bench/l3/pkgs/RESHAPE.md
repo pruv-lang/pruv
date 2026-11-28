@@ -1654,3 +1654,32 @@ direct hex read above. Structure is not zero (gaps above), so performance was no
     stays at or below hand within noise, long_text window 1.012 -> 1.006; the RSS cells drop from 1.04-1.07 to
     0.99-1.03. json `run_r03_measure.py`, old and new compiler alternating: all cells at or below hand
     (query_chain1 L 9.15 -> 7.72 ms against hand 8.4-9.2 ms).
+- 4.4zg-LB: language part closed, document part open. The Rust compiler now has borrowing enums (SPEC R-6g9-17): a
+  non-generic enum with a variant field whose type is a borrowing struct is itself `ref` (Rust `enum E<'a>`). It is
+  allowed as an immutable `let`, a read parameter and a `from(...)` result; a constructor takes the provenance of the
+  Doc it holds, each Doc binder of a read match has its own liveness, and a consuming match moves only the whole Doc
+  (`Parsed(d) => Line::Object(move d)`, no source copy, no tape clone). The design and the debate (Codex, local
+  `work/lgaps30/NOTES.md`) cut the rule to that set; nested borrowing enums, direct `ref` payloads, containers,
+  generics, `let mut` / `inout` / `take` and partial moves of a binder field stay `type/borrow_signature`.
+  Tests: `tests/spec/r6g9_17_*`, `tests/spec/r6g9_2_enum_payload` (now an accept test on both backends).
+  - claude's `JsonDocument.source` is not switched to a borrow in this bundle. The shared `pkgs/json` document type is
+    used by 23 functions in `pkgs/access` and about 30 in claude, and qwen keeps a `Vec<JsonDocument>`
+    (`qwen/import.pruv:498`, `528-533`), which a borrowing struct still cannot be an element of. A claude-only second
+    document type would be a workaround, so the functions stay as they are. Open as 4.4zh-DB and 4.4zh-VB below.
+  - Measured with the final compiler of this bundle (claude `rs/rust,rs/llvm` against hand, alternating, under the
+    perf lock at load 3.3-5.3, local `work/lgaps30/perf_cells.json` and `perf_cells_long_text.json`): long_text
+    window 1.006 / 0.696 in 7 rounds and 0.999 / 0.698 in 15 rounds (RSS 0.999 / 1.004). tools/perf_gate.py: 35
+    failing cells of 144 (27 after L-gaps 29); every one except that long_text time cell is an RSS cell 1.002-1.029x
+    (one or two 16 KiB pages), and no other M/L time cell is above hand.
+- 4.4zh-DB: open. Switch `pkgs/json` `JsonDocument.source` to `ref [u8]` (with `JsonParse` and claude `Line` as
+  borrowing enums under R-6g9-17) across `pkgs/parse`, `pkgs/access`, `pkgs/lines` and the benches that use them.
+  Needs: `lines::parse_owned(take data)` cannot return a borrow of its own buffer; codex / mcp truncate the line
+  buffer before the match; `access::plain_str` takes `from(doc)`; the `lib/` copies have their own declarations.
+- 4.4zh-VB: language gap, open. A `Vec` (or `Option`) of a borrowing struct (qwen `Vec<JsonDocument>` once the source
+  is borrowed). R-6g9-10 allows only local `Vec<ref str>`.
+- 4.4zh-NB: language gap, open, no target needs it yet. Nested borrowing enums, borrowing enums inside structs, and
+  partial moves (`move d.tape`) out of a borrowing enum binder (R-6g9-17 rejects them).
+- 4.4zh-IP: open (found by the L-gaps 30 audit, older than 4.4zg-CS). R-7-3 does not describe two parts of
+  `pruvc-rs/crates/pruv-core/src/inline_policy.rs`: explicitly pinned `#[inline]` fns are left out of the call graph
+  used for the recursion check (line 48), and a `__pruv_fp` twin counts its adapter's call sites (line 156). Either
+  the SPEC row or the code needs to change.

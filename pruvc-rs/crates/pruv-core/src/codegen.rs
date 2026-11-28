@@ -1876,6 +1876,9 @@ impl<'a> Gen<'a> {
 
     /// rty, except that an extended parameter is a shared reference `&Name` (read view)
     fn rt(&self, t: &str, param: bool) -> String {
+        if param && matches!(self.table.decl(t), Some(TypeDecl::Enum(e)) if e.borrowing) {
+            return format!("&{}<'_>", t);
+        }
         if param && self.is_ext(Some(t)) {
             return format!("&{}", rty(t, false)); // P6: a tuple name spells as the native tuple
         }
@@ -2205,7 +2208,7 @@ impl<'a> Gen<'a> {
         self.pinned.clear();
         crate::foreign_shim::walk_stmts(&f.body, &mut |node| {
             if let crate::foreign_shim::Node::Let(s) = node {
-                if s.borrowed || self.table.decl(&s.ty).is_some_and(crate::borrowed::borrowing_struct) {
+                if s.borrowed || self.table.decl(&s.ty).is_some_and(crate::borrowed::borrowing_decl) {
                     // A later use of the view keeps its source alive even if the owner is not named again.
                     crate::refine::expr_names(&s.value, &mut self.pinned);
                 }
@@ -2216,7 +2219,7 @@ impl<'a> Gen<'a> {
                 // G5 A2: resizable arrays borrow the Vec; other arrays borrow its slice
                 if self.resizable_inouts.contains(&p.name) {
                     format!("&mut {}", rty(&p.ty, false))
-                } else if self.table.decl(&p.ty).is_some_and(crate::borrowed::borrowing_struct) {
+                } else if self.table.decl(&p.ty).is_some_and(crate::borrowed::borrowing_decl) {
                     // R-6g9-6: leave the lifetime of the borrowed fields free.
                     format!("&mut {}<'_>", p.ty)
                 } else if GType::from_key(&p.ty).is_array() {
@@ -2228,13 +2231,13 @@ impl<'a> Gen<'a> {
                 self.rt_width(&p.ty, !p.take, self.storage.layout_of(p))
             };
             if f.lent_fields(&p.name).next().is_some() {
-                if self.table.decl(&p.ty).is_some_and(crate::borrowed::borrowing_struct) {
+                if self.table.decl(&p.ty).is_some_and(crate::borrowed::borrowing_decl) {
                     format!("&'a {}<'_>", p.ty)
                 } else {
                     format!("&'a {}", p.ty)
                 }
             } else if f.borrow_from.as_ref().is_some_and(|from| from.contains(&p.name)) {
-                if self.table.decl(&p.ty).is_some_and(crate::borrowed::borrowing_struct) {
+                if self.table.decl(&p.ty).is_some_and(crate::borrowed::borrowing_decl) {
                     format!("&{}<'a>", p.ty)
                 } else {
                     format!("&'a {}", &ty[1..])

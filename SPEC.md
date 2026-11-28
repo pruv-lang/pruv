@@ -1681,9 +1681,10 @@ borrowed value is live.
   - *Types.* `ref [u8]` and `ref str` (`ref` is contextual, only in type position) are borrowed views. A
     non-generic struct may have `ref` fields; it is then a borrowing struct (Rust `struct Doc<'a>`). A `ref` type or
     a borrowing struct is allowed only as the type of an immutable `let`, a function result, a field of a borrowing
-    struct, and (borrowing struct only) a read parameter, a `let mut` local or an `inout` parameter (R-6g9-6).
+    struct, and (borrowing struct only) a read parameter, a `let mut` local, an `inout` parameter (R-6g9-6) or a
+    variant field of a borrowing enum (R-6g9-17).
     Anywhere else (`let mut` of a `ref` type, a parameter declared `ref`, `inout` of a `ref` type, `take`,
-    `Vec`/`Option`/map/enum payload/generic argument, a generic function, a host entry or `par` argument) is
+    an enum payload except under R-6g9-17, a `Vec`/`Option`/map element or generic argument, a generic function, a host entry or `par` argument) is
     `type/borrow_signature`.
   - *Results.* A function whose result is `ref T` or a borrowing struct writes `-> T from(p1, .., pn)` (`from` is
     contextual), naming at least one parameter, each at most once; each `pi` is a `[u8]` / `str` parameter (read or `inout`) or a
@@ -2007,8 +2008,8 @@ borrowed value is live.
   fields as above.
   Tests: [document](tests/spec/r6g9_2_doc.pruv), [invariant](tests/spec/r6g9_2_doc_invariant.pruv),
   [forwarded](tests/spec/r6g9_2_forward.pruv), [empty `ref` field](tests/spec/r6g9_3_empty_field.pruv),
-  [copy of a borrowed source](tests/spec/r6g9_2_copy_source.pruv), [contract constructor](tests/spec/r6g9_2_contract_ctor.pruv),
-  [reject enum payload](tests/spec/r6g9_2_enum_payload.pruv).
+  [copy of a borrowed source](tests/spec/r6g9_2_copy_source.pruv), [contract constructor](tests/spec/r6g9_2_contract_ctor.pruv);
+  a borrowing struct as an enum payload is R-6g9-17.
 - R-6g9-3 **Static views need no `alloc`.** An R-6g8-3 static text local is the literal's read-only global (Rust
   `let x: &'static str = "lit";`, LLVM the global with no copy, also in a recursive or metered function), so it
   needs no `alloc` effect: `effect/missing_effect` no longer fires for it. A literal in any owned position still
@@ -2361,6 +2362,21 @@ borrowed value is live.
     ([`2^40` bytes accepted](tests/spec/lgaps8_join_bound.pruv), [one byte over](tests/spec/lgaps8_join_bound_sep.pruv)).
     With `--no-verify`, LLVM saturates the running sum and computes `(n - 1) * L` and the total with overflow
     intrinsics, so a wrapped total cannot pass the bound check (LG7-B1).
+- R-6g9-17 **Borrowing enums (4.4zg-LB, L-gaps 30).** A non-generic enum with a variant field of borrowing
+  struct type carries its lifetime (Rust `enum E<'a>`). An immutable local or an internal non-generic read
+  parameter may hold it. A result requires a nonempty `from` list, even for a unit variant. A constructor inherits
+  the sources and access modes of its borrowing payloads; scalar and unit variants carry no loans. A call inherits
+  the union of its declared arguments' sources. Returning any other source is `type/borrow_escape`.
+  Each borrowing match binder holds the scrutinee's loans through its own last use. A binder's owned buffer
+  belongs to that binder and cannot escape as an outer loan. The consuming match conditions of R-6e-12a/b permit
+  moving a whole borrowing struct binder. Remaining owned fields of the active variant drop once on every exit,
+  including return, break, continue and error propagation. Direct ref payloads, recursive borrowing enums,
+  nesting borrowing enums in records or enums, containers, generic arguments, host or extern boundaries,
+  `par`, `let mut`, `inout`, `take` and partial moves from the borrowing binder are `type/borrow_signature`.
+  Tests: [conversion](tests/spec/r6g9_2_enum_payload.pruv), [exit paths](tests/spec/r6g9_17_exit_drop.pruv),
+  [binder liveness](tests/spec/r6g9_17_binder_live.pruv), [invalid document](tests/spec/r6g9_17_bad_doc.pruv);
+  rejects: [escape](tests/spec/r6g9_17_escape.pruv), [tape escape](tests/spec/r6g9_17_tape_escape.pruv), [no from](tests/spec/r6g9_17_no_from.pruv), [mut](tests/spec/r6g9_17_mut.pruv), [inout](tests/spec/r6g9_17_inout.pruv), [vec](tests/spec/r6g9_17_vec.pruv), [nested](tests/spec/r6g9_17_nested.pruv), [partial move](tests/spec/r6g9_17_partial_move.pruv), [partial source](tests/spec/r6g9_17_partial_source.pruv), [partial param](tests/spec/r6g9_17_partial_param.pruv), [read move](tests/spec/r6g9_17_read_move.pruv), [use after move](tests/spec/r6g9_17_use_after_move.pruv).
+
 ## 6h. Files (G10)
 
 `fs` is the file-system effect, independent of `io` (stdout) and `alloc`. Direct and transitive calls
@@ -3991,8 +4007,9 @@ and binaries by up to 38%. Size thresholds and single-call-site rules alone did 
 
 R-7-7 The LLVM backend applies the same rule to its finished IR text: every `define internal ... @F__pruv_body(...) {`
 header is a candidate, its size is its number of body lines up to the first line `}`, call sites are the textual
-`@F__pruv_body(` tokens outside its own header, and recursion, inclusive size and the `INLINE_SMALL` /
-`INLINE_BUDGET` thresholds are as in R-7-3. A promoted body gets `alwaysinline` before ` {`; the rest keep no
+`@F__pruv_body(` tokens outside its own header, and recursion, inclusive size and the `INLINE_SMALL` threshold are as
+in R-7-3. The LLVM rule keeps the copy budget that R-7-3 dropped for Rust in 4.4zg-CS: a body with two or more call
+sites is also promoted when `incl * (sites - 1) <= INLINE_BUDGET` (1500). A promoted body gets `alwaysinline` before ` {`; the rest keep no
 attribute and clang's heuristics. Runtime helpers that already carry `alwaysinline` and ABI wrappers are not
 candidates; source attributes (section 6f) are not read. Why: clang -O2 kept calls to small Pruv bodies that the
 Rust backend's `#[inline(always)]` removes (D-R10-1). The rule does not promote `put_cp` of
@@ -4003,7 +4020,9 @@ Tests: [accept](tests/spec/r7_3_inline.pruv) (a small fn called once gets `#[inl
 [reject](tests/spec/r7_3_inline_recursive.pruv) (a recursive fn keeps `#[inline]`),
 [accept](tests/spec/r7_3_inline_entry.pruv) (a large uncalled `pub fn` keeps `#[inline]`, a small one gets
 `#[inline(always)]`),
-[reject](tests/spec/r7_3_inline_entry_called.pruv) (calling the same large `pub fn` from `main` goes to its `__pruv_body`, so the wrapper keeps `#[inline]` and the body, with two sites, gets always).
+[reject](tests/spec/r7_3_inline_entry_called.pruv) (calling the same large `pub fn` from `main` goes to its `__pruv_body`, and the body, with two sites and more than `INLINE_SMALL` lines, keeps `#[inline]`; the wrapper, whose inclusive size is
+small once the body is not counted as always, gets `#[inline(always)]`; the frozen Python compiler keeps its budget
+rule, so its expectation is the opposite, in the test's `py` key).
 
 A source function attribute (section 6f) takes precedence over the automatic R-7-3 rule. The Rust body and checked
 wrapper use the explicit `#[inline]` or `#[inline(always)]` directive, or `#[cold]` followed by `#[inline(never)]`

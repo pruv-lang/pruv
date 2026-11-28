@@ -1,0 +1,4 @@
+// spec: R-6g9-17 reject
+struct Doc { source: ref [u8], tape: [i64] }
+enum E { Hit(code: i64, doc: Doc), Skip }
+fn bad() -> i64 { let xs: Vec<E> = vec_new::<E>(); return 0; }

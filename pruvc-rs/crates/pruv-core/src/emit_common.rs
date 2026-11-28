@@ -520,14 +520,16 @@ pub fn emit_public_types_with(prog: &Program, tt: &TypeTable) -> String {
                         let fs: Vec<String> = v
                             .fields
                             .iter()
-                            .map(|f| fty(&f.ty, &format!("{}::{}.{}", e.name, v.name, f.name)))
+                            .map(|f| if tt.decl(&f.ty).is_some_and(crate::borrowed::borrowing_struct) {
+                                format!("{}<'a>", f.ty)
+                            } else { fty(&f.ty, &format!("{}::{}.{}", e.name, v.name, f.name)) })
                             .collect();
                         vs.push(format!("{}({})", v.name, fs.join(", ")));
                     } else {
                         vs.push(v.name.clone());
                     }
                 }
-                out.push(format!("{}enum {} {{ {} }}", pv, e.name, vs.join(", ")));
+                out.push(format!("{}enum {}{} {{ {} }}", pv, e.name, if e.borrowing { "<'a>" } else { "" }, vs.join(", ")));
             }
         }
         out.push(String::new());

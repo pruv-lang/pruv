@@ -1,5 +1,37 @@
-// spec: R-6g9-2 reject
-// A borrowing struct is not an enum payload, so moving its owned field out through a match has no source form yet.
-struct Doc { src: ref [u8], tape: [i64] }
-enum E { A(d: Doc), B }
-pub fn f() -> i64 { return 0; }
+// spec: R-6g9-17 accept
+struct Doc { source: ref [u8], tape: [i64], invariant len(tape) == 1 && tape[0] == 9 }
+enum Parse { Parsed(d: Doc), Failed(code: i64) }
+enum Line { Object(d: Doc), Skip, Defect(code: i64) }
+fn document(data: [u8]) -> Doc from(data) ! alloc
+  requires len(data) >= 2
+  ensures len(result.source) == len(data) - 1
+{
+  let t: [i64] = alloc(1, 9);
+  return Doc { source: subview(data, 1, len(data)), tape: move t };
+}
+fn parse(data: [u8]) -> Parse from(data) ! alloc
+  ensures is_variant(result, Parse::Parsed) ==> len(variant_field(result, Parse::Parsed, d).source) == len(data) - 1
+{
+  if len(data) < 2 { return Parse::Failed(0); }
+  let d: Doc = document(data);
+  return Parse::Parsed(move d);
+}
+fn line(data: [u8]) -> Line from(data) ! alloc {
+  let p: Parse = parse(data);
+  match p {
+    Parse::Parsed(d) => { return Line::Object(move d); }
+    Parse::Failed(k) => { if k == 0 { return Line::Skip; } return Line::Defect(k); }
+  }
+}
+fn read(l: Line) -> i64 {
+  match l {
+    Line::Object(d) => { if len(d.source) == 0 { return 0; } return d.source[0] + d.tape[0]; }
+    Line::Skip => { return 0; }
+    Line::Defect(k) => { return k; }
+  }
+}
+pub fn checksum() -> i64 ! alloc {
+  let data: [u8] = alloc(2, 7);
+  let l: Line = line(data);
+  return read(l);
+}

@@ -1,0 +1,8 @@
+// spec: R-6g9-17 reject
+struct Doc { source: ref [u8], tape: [i64] }
+enum E { Hit(code: i64, doc: Doc), Skip }
+fn bad(a: [u8], b: [u8]) -> E from(a) ! alloc {
+  let t: [i64] = alloc(1, 2);
+  let d: Doc = Doc { source: b, tape: move t };
+  return E::Hit(0, move d);
+}

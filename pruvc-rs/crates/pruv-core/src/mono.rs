@@ -202,7 +202,7 @@ impl<'a> Mono<'a> {
                         comps.extend(path.iter().cloned());
                         comps.push(m.src_name.clone());
                         format!("pruv_p_t_{}", encode_name(&comps))
-                    } else if path.is_empty() && (m.is_pub || standalone && crate::borrowed::borrowing_struct(d)) {
+                    } else if path.is_empty() && (m.is_pub || standalone && crate::borrowed::borrowing_decl(d)) {
                         m.src_name.clone()
                     } else {
                         let mut comps = path.clone();
@@ -967,7 +967,7 @@ impl<'a> Mono<'a> {
                         fields: self.fields(&v.fields)?,
                     });
                 }
-                TypeDecl::Enum(EnumDecl { line: e.line, col: e.col, name: stem.to_string(), variants, tparams: Vec::new() })
+                TypeDecl::Enum(EnumDecl { borrowing: e.borrowing, line: e.line, col: e.col, name: stem.to_string(), variants, tparams: Vec::new() })
             }
         })
     }

@@ -23,6 +23,10 @@ pub(crate) fn borrowing_struct(decl: &TypeDecl) -> bool {
     matches!(decl, TypeDecl::Struct(s) if s.fields.iter().any(|f| f.borrowed))
 }
 
+pub(crate) fn borrowing_decl(decl: &TypeDecl) -> bool {
+    borrowing_struct(decl) || matches!(decl, TypeDecl::Enum(e) if e.borrowing)
+}
+
 fn contains_borrow(ty: &GType, structs: &HashSet<String>) -> bool {
     ty.name == "@ref" || structs.contains(&ty.name)
         || ty.args.iter().any(|t| contains_borrow(t, structs))
@@ -108,7 +112,7 @@ fn annotation(ty: &mut String, line: i64, col: i64, permitted: bool, wrapper: bo
     }
 }
 
-fn prepare_block(body: &mut [Stmt], permitted: bool, structs: &HashSet<String>) -> Res<()> {
+fn prepare_block(body: &mut [Stmt], permitted: bool, structs: &HashSet<String>, enums: &HashSet<String>) -> Res<()> {
     for st in body {
         match st {
             // R-6g9-10: a local `Vec<ref str>` is a view list: `vec<string>` to the checker and the verifier (they see the
@@ -126,17 +130,17 @@ fn prepare_block(body: &mut [Stmt], permitted: bool, structs: &HashSet<String>) 
             }
             Stmt::Let(s) if !s.is_place() => {
                 // R-6g9-6: mutability is allowed for a borrowing struct, but not for a ref local.
-                if !(permitted && structs.contains(&s.ty)) {
+                if !(permitted && structs.contains(&s.ty) && (!s.mutable || !enums.contains(&s.ty))) {
                     s.borrowed = annotation(&mut s.ty, s.line, s.col, permitted && !s.mutable, true, structs)?;
                 }
             }
             Stmt::If(s) => {
-                prepare_block(&mut s.then, permitted, structs)?;
-                prepare_block(&mut s.els, permitted, structs)?;
+                prepare_block(&mut s.then, permitted, structs, enums)?;
+                prepare_block(&mut s.els, permitted, structs, enums)?;
             }
-            Stmt::While(s) => prepare_block(&mut s.body, permitted, structs)?,
-            Stmt::ForMap(s) => prepare_block(&mut s.body, permitted, structs)?,
-            Stmt::Match(s) => for a in &mut s.arms { prepare_block(&mut a.body, permitted, structs)?; },
+            Stmt::While(s) => prepare_block(&mut s.body, permitted, structs, enums)?,
+            Stmt::ForMap(s) => prepare_block(&mut s.body, permitted, structs, enums)?,
+            Stmt::Match(s) => for a in &mut s.arms { prepare_block(&mut a.body, permitted, structs, enums)?; },
             _ => {}
         }
     }
@@ -164,19 +168,27 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
         TypeDecl::Struct(s) if s.fields.iter().any(|f| GType::from_key(&f.ty).name == "@ref") => Some(s.name.clone()),
         _ => None,
     }).collect();
+    let enums: HashSet<String> = prog.types.iter().filter_map(|d| match d {
+        TypeDecl::Enum(e) if e.tparams.is_empty() && e.variants.iter().flat_map(|v| &v.fields)
+            .any(|f| structs.contains(&f.ty)) => Some(e.name.clone()),
+        _ => None,
+    }).collect();
+    let borrowing = structs.union(&enums).cloned().collect();
     for d in &mut prog.types {
         match d {
             TypeDecl::Struct(s) => {
                 for f in &mut s.fields {
                     if !(s.tparams.is_empty() && structs.contains(&s.name) && structs.contains(&f.ty)) {
-                        f.borrowed = annotation(&mut f.ty, f.line, f.col, s.tparams.is_empty(), false, &structs)?;
+                        f.borrowed = annotation(&mut f.ty, f.line, f.col, s.tparams.is_empty(), false, &borrowing)?;
                     }
                 }
             }
             TypeDecl::Enum(e) => {
+                e.borrowing = enums.contains(&e.name);
                 for v in &mut e.variants {
                     for f in &mut v.fields {
-                        annotation(&mut f.ty, f.line, f.col, false, false, &structs)?;
+                        if e.borrowing && structs.contains(&f.ty) { continue; }
+                        annotation(&mut f.ty, f.line, f.col, false, false, &borrowing)?;
                     }
                 }
             }
@@ -192,14 +204,14 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
             // A read-only ref [u16] parameter has the same lifetime as a plain read parameter.
             let read_u16_view = permitted && !p.take && p.mode_pos.is_none() && p.ty == "@ref<array_u16>";
             // R-6g9-6: borrowing structs may be inout parameters.
-            if !(permitted && structs.contains(&p.ty) && !p.take) {
-                annotation(&mut p.ty, f.line, f.col, read_u16_view, false, &structs)?;
+            if !(permitted && borrowing.contains(&p.ty) && !p.take && (!enums.contains(&p.ty) || p.mode_pos.is_none())) {
+                annotation(&mut p.ty, f.line, f.col, read_u16_view, false, &borrowing)?;
             }
         }
-        if !(permitted && structs.contains(&f.ret)) {
-            f.borrowed_result = annotation(&mut f.ret, f.line, f.col, permitted, true, &structs)?;
+        if !(permitted && borrowing.contains(&f.ret)) {
+            f.borrowed_result = annotation(&mut f.ret, f.line, f.col, permitted, true, &borrowing)?;
         }
-        let borrowed_result = f.borrowed_result || structs.contains(&f.ret);
+        let borrowed_result = f.borrowed_result || borrowing.contains(&f.ret);
         match &f.borrow_from {
             Some(names) if borrowed_result && !names.is_empty() => {
                 for (i, name) in names.iter().enumerate() {
@@ -218,7 +230,7 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
                         }
                         continue;
                     }
-                    if p.take || !(is_view_base(&p.ty) || (structs.contains(&p.ty) && p.mode_pos.is_none())) {
+                    if p.take || !(is_view_base(&p.ty) || (borrowing.contains(&p.ty) && p.mode_pos.is_none())) {
                         return Err(signature(f.line, f.col));
                     }
                 }
@@ -231,7 +243,7 @@ pub(crate) fn prepare(prog: &mut Program, hosts: &[bool]) -> Res<()> {
             None if !borrowed_result => {}
             _ => return Err(signature(f.line, f.col)),
         }
-        prepare_block(&mut f.body, f.tparams.is_empty(), &structs)?;
+        prepare_block(&mut f.body, f.tparams.is_empty(), &borrowing, &enums)?;
     }
     Ok(())
 }
@@ -592,6 +604,7 @@ struct Analysis<'a> {
     collecting: Cell<bool>,
     place_functions: &'a PlaceFunctions,
     functions: HashMap<&'a str, &'a Function>,
+    enums: HashMap<&'a str, &'a EnumDecl>,
     records: HashMap<&'a str, &'a StructDecl>,
     structs: HashSet<&'a str>,
 }
@@ -686,6 +699,18 @@ impl Analysis<'_> {
             }
         } else {
             match e {
+                Expr::Move(m) if m.fields.is_empty() && expr_ty(e).as_deref().is_some_and(|ty|
+                    self.records.contains_key(ty) || self.enums.contains_key(ty)) => match locals.get(&m.name) {
+                    Some(Origin::View(held)) => roots = held.clone(),
+                    _ => merge(&mut roots, Source::direct(&m.name), Access::Read),
+                },
+                Expr::EnumCtor(c) if self.enums.contains_key(c.enum_name.as_str()) => {
+                    for arg in &c.args {
+                        if expr_ty(arg).as_deref().is_some_and(|t| self.records.contains_key(t)) {
+                            for (source, access) in self.provenance(arg, locals)? { merge(&mut roots, source, access); }
+                        }
+                    }
+                }
                 Expr::StrLit(_) => {}
                 Expr::Ctor(c) if expr_ty(e).as_deref().is_some_and(is_view_wrapper) => {
                     if matches!(c.name.as_str(), "Some" | "Ok") {
@@ -800,8 +825,13 @@ impl Analysis<'_> {
                         if self.ref_field(e, &field.name) { self.provenance(&field.value, locals).map(|_| ()) }
                         else { self.owned(&field.value, locals) }
                     }),
-                    // Only the explicit builtin view wrapper can carry a borrowed payload.
-                    Expr::EnumCtor(x) => x.args.iter().try_for_each(|a| self.owned(a, locals)),
+                    Expr::EnumCtor(x) => x.args.iter().try_for_each(|a| {
+                        if expr_ty(a).as_deref().is_some_and(|t| self.records.contains_key(t)) {
+                            self.provenance(a, locals).map(|_| ())
+                        } else {
+                            self.owned(a, locals)
+                        }
+                    }),
                     Expr::Ctor(_) if expr_ty(e).as_deref().is_some_and(is_view_wrapper) =>
                         self.provenance(e, locals).map(|_| ()),
                     Expr::Ctor(x) => x.arg.iter().try_for_each(|a| self.owned(a, locals)),
@@ -809,7 +839,7 @@ impl Analysis<'_> {
                 };
                 failure = result.err();
                 if matches!(st, Stmt::Par(_)) && (self.is_view(e, locals)
-                    || expr_ty(e).as_deref().is_some_and(|ty| self.records.contains_key(ty))) {
+                    || expr_ty(e).as_deref().is_some_and(|ty| self.records.contains_key(ty) || self.enums.contains_key(ty))) {
                     failure = Some(signature(e.line(), e.col()));
                 }
             });
@@ -877,7 +907,7 @@ impl Analysis<'_> {
     }
 
     fn borrow_let(&self, s: &Let) -> bool {
-        s.borrowed || self.records.contains_key(s.ty.as_str())
+        s.borrowed || self.records.contains_key(s.ty.as_str()) || self.enums.contains_key(s.ty.as_str())
     }
 
     /// Adds the statements of `body` to `graph` in pre-order; `incoming` are the points that flow into the block.
@@ -1008,7 +1038,13 @@ impl Analysis<'_> {
                     let mut out = Vec::new();
                     let wrapper = expr_ty(&s.scrutinee).as_deref().is_some_and(is_view_wrapper);
                     for a in &s.arms {
-                        if let Some(binder) = a.binders.first().filter(|_| wrapper && matches!(a.ctor.as_str(), "Some" | "Ok")) {
+                        let variant = expr_ty(&s.scrutinee).as_deref().and_then(|t| self.enums.get(t))
+                            .and_then(|e| e.variants.iter().find(|v| v.name == a.ctor));
+                        let mut entry_parent = n;
+                        let mut saved = Vec::new();
+                        for (i, binder) in a.binders.iter().enumerate() {
+                            if !(wrapper && i == 0 && matches!(a.ctor.as_str(), "Some" | "Ok")
+                                || variant.and_then(|v| v.fields.get(i)).is_some_and(|f| self.records.contains_key(f.ty.as_str()))) { continue; }
                             let roots = match self.provenance(&s.scrutinee, locals) {
                                 Ok(roots) => roots,
                                 Err(e) => {
@@ -1022,18 +1058,20 @@ impl Analysis<'_> {
                             let old_bit = scope.insert(binder, bit);
                             // The arm defines a fresh loan, including when this match is in a loop.
                             let entry = graph.points.len();
-                            graph.points[n].succ.push(entry);
+                            graph.points[entry_parent].succ.push(entry);
+                            entry_parent = entry;
                             graph.points.push(Point {
                                 succ: Vec::new(), gen: Vec::new(), kill: Some(bit),
                                 uses: Vec::new(), site: st.position(), own_move: None,
                             });
-                            out.extend(self.build(f, &a.body, vec![entry], locals, scope, graph));
+                            saved.push((binder, old_origin, old_bit));
+                        }
+                        out.extend(self.build(f, &a.body, vec![entry_parent], locals, scope, graph));
+                        for (binder, old_origin, old_bit) in saved.into_iter().rev() {
                             if let Some(old) = old_origin { locals.insert(binder.clone(), old); }
                             else { locals.remove(binder); }
                             if let Some(old) = old_bit { scope.insert(binder, old); }
                             else { scope.remove(binder.as_str()); }
-                        } else {
-                            out.extend(self.build(f, &a.body, vec![n], locals, scope, graph));
                         }
                     }
                     graph.join(out)
@@ -1069,6 +1107,10 @@ pub(crate) fn check(prog: &Program, place_functions: &PlaceFunctions) -> Res<()>
         collecting: Cell::new(false),
         place_functions,
         functions: prog.functions.iter().map(|f| (f.name.as_str(), f)).collect(),
+        enums: prog.types.iter().filter_map(|d| match d {
+            TypeDecl::Enum(e) if e.borrowing => Some((e.name.as_str(), e)),
+            _ => None,
+        }).collect(),
         records: prog.types.iter().filter_map(|d| match d {
             TypeDecl::Struct(s) if borrowing_struct(d) => Some((s.name.as_str(), s)),
             _ => None,
