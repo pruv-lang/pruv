@@ -81,6 +81,10 @@ Pruv functions with no hand counterpart (REQ-W, removed by the port; the synchro
 | REQ-O | `open(&mut self)` serializes opens on one instance, so a second open cannot see `busy` for a key held by a running first open (tests insert the key); TS / Pruv allow overlap | `hand/req.rs:482` |
 | REQ-S | `Seed` is data, not the `fill` callback: `progress`, `status`, `usage`, nested `imported`, and keeping other `engineThreads` slots are the host adapter's job and are not checked here | `hand/req.rs` `Seed`, `turns_of` |
 | REQ-L | hand `title_of` collapses the whole candidate to UTF-16 and then cuts at 80; Pruv builds only the bounded prefix. Rust `String` input cannot hold a lone surrogate | `hand/req.rs:787`, `req_fill.pruv:105-178` |
+| REQ-G6R | P10H grid kernel: a trusted G6 fact cannot return a list of records, so the session list and the item list are packed `String`s (flag char + length-prefixed fields) that Pruv parses; the hand gets `&[Session]`. Needs record-list host returns | `hostfact/root.pruv` `rg_*`, `hostfact/host.rs` `rg_sessions` |
+| REQ-SNAP | each fresh session observation copies the whole packed list (one `String` clone per lookup, O(S) even when the first session matches); the nocopy control walks the host list in place and stops at the match, so it is 2.2x to 15x faster than Pruv on `first` cells with M >= 10 and on open `first`. Hand copies too (REQ-B). Needs a borrowed or streamed host observation (language / compiler) | `hostfact/host.rs` `rg_sessions`, `hostfact/req_grid.rs` `list_nocopy` |
+| REQ-TL | grid kernel `title_in` scans the titles observation linearly per bound item; hand builds a `HashMap` once. No map over a packed observation without a record list (REQ-G6R) | `hostfact/root.pruv` `title_in` |
+| REQ-PFX | grid kernel has only the bound-lookup / row / open decisions; the constant prefix (sources, folder, timers, account, opening key, seed / `title_of` / `turns_of`) is not ported and is added to Pruv from the `prefix` lane (hand with S=0, M=0). Part of REQ-PORT | `hostfact/req_grid.rs` lane `prefix` |
 
 ## 3b. Codex review (gpt-6.2-astra, high, one run)
 
@@ -98,6 +102,7 @@ Fixed in `hand/req.rs` (behavior differences from TS):
 5. `lastPlan`: was a string only; now `Plan` (text or raw object), included when truthy, never stringified.
 
 Kept as rows: REQ-K, REQ-D (Pruv side), REQ-B, REQ-T, REQ-X, REQ-O, REQ-S, REQ-L (hand-model limits or port work).
+P10H grid rows: REQ-G6R, REQ-SNAP, REQ-TL, REQ-PFX.
 The review confirmed the list title priority and the `open` early-exit order match TS.
 
 ## 4. Results
@@ -112,3 +117,13 @@ Pruv unchanged, so these are the 4.4 baseline runs (logs in `work/reset4_4/`, no
 | `q.py` (same 300 cases) | rs/llvm | 300 / 300 equal |
 
 No perf run (the port is blocked; P10H rows in `lib/RESHAPE.md` step 4.4).
+
+### P10H grid (synchronous-fact kernel, Rust backend)
+
+`hostfact/run.py --only grid --rounds 9` (01:50 KST 2026-11-29, load 4.77-5.72, perf lock). Pruv kernels `rg_list` /
+`rg_open` (`hostfact/root.pruv`) vs `hand/req.rs` `Requests::list` / `open` on the same world, 36 cells
+(S=1000/5000/20000 x M=1/10/50, open M=0, x none/first/last). Gates: row/open equality 36/36, call counts 36/36,
+differential 2000/2000 worlds, fresh query 1/1, order 2/2, host failure 5/5, re-entry 2/2. `tools/perf_gate.py`:
+PASS, (Pruv + prefix) / hand 0.009-0.152. Against the nocopy control (hand decisions without the `to_vec`, REQ-B)
+Pruv is 0.24-0.54 at M=1 but 0.89-1.90 on none/last cells with M >= 10 and 2.2-15x on `first` cells (REQ-SNAP).
+Full table and the §3.2 per-call budget: `docs/L3_RESTRUCTURE_SPEC.md` appendix P10H.6. LLVM: pending (P17b/c).

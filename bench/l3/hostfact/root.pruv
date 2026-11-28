@@ -109,3 +109,316 @@ pub fn rq_find(s_n: i64, m_n: i64) -> i64 ! io
   }
   return -1;
 }
+
+// ---------------------------------------------------------------- req list/open on synchronous facts (P10H grid)
+// The host answers each sessionList observation with a fresh owned String (one copy of its list, packed as below);
+// every decision (skip temporary, candidate order, engine default, slot prefix, first match, title choice) is here.
+// Packed observation: byte 0 is '0' (48) for an answer, anything else for a host failure; then per session a flag
+// byte 64 + bits (1 temporary, 2 external, 4 terminal cli, 8 cli engine present), then fields. A field is a length
+// in two bytes (hi, lo, each < 128) and that many bytes. Session: id, title, [ext engine, ext thread, fork count
+// (2 bytes), forks], [cli engine], [cli thread], slot count (2 bytes), (slot key, thread id) pairs.
+// A trusted fn cannot return a record list (R-6d-1: String, Vec<i64>, Vec<String>), hence the packed String
+// (row REQ-G6R in bench/l3/req/RESHAPE.md).
+trusted rust fn rg_sessions() -> String ! alloc, io
+  ensures true
+  = "::hostfact_host::rg_sessions";
+trusted rust fn rg_is_temporary(i: i64) -> bool ! io
+  ensures true
+  = "::hostfact_host::rg_is_temporary";
+trusted rust fn rg_items() -> String ! alloc, io
+  ensures true
+  = "::hostfact_host::rg_items";
+trusted rust fn rg_row(j: i64, sid: str, so: i64, sl: i64, ttl: str, to: i64, tl: i64) -> () ! io
+  ensures true
+  = "::hostfact_host::rg_row";
+trusted rust fn rg_read(thread: str) -> i64 ! io
+  ensures true
+  = "::hostfact_host::rg_read";
+trusted rust fn rg_cancelled() -> bool ! io
+  ensures true
+  = "::hostfact_host::rg_cancelled";
+trusted rust fn rg_existing(sid: str, so: i64, sl: i64) -> () ! io
+  ensures true
+  = "::hostfact_host::rg_existing";
+trusted rust fn rg_create(thread: str, turns: i64) -> () ! io
+  ensures true
+  = "::hostfact_host::rg_create";
+
+// End of the field at q (q + 2 + length), or -2 when the prefix or the bytes run past the end.
+fn fend(t: str, q: i64) -> i64
+  requires 0 <= q && q <= len(t) && len(t) <= 1000000000000
+  ensures result == -2 || (q + 2 <= result && result <= len(t))
+{
+  if q + 2 > len(t) { return -2; }
+  let hi: i64 = t[q];
+  let lo: i64 = t[q + 1];
+  if hi >= 128 || lo >= 128 { return -2; }
+  let e: i64 = q + 2 + hi * 128 + lo;
+  if e > len(t) { return -2; }
+  return e;
+}
+
+// Count in two bytes at q (same encoding as a field length), or -2.
+fn fcount(t: str, q: i64) -> i64
+  requires 0 <= q && q <= len(t) && len(t) <= 1000000000000
+  ensures result == -2 || (0 <= result && result <= 16383 && q + 2 <= len(t))
+{
+  if q + 2 > len(t) { return -2; }
+  let hi: i64 = t[q];
+  let lo: i64 = t[q + 1];
+  if hi >= 128 || lo >= 128 { return -2; }
+  return hi * 128 + lo;
+}
+
+// Does the field [q, e) hold exactly x[xo .. xo + xl]?
+fn feq(t: str, q: i64, e: i64, x: str, xo: i64, xl: i64) -> bool
+  requires 0 <= q && q + 2 <= e && e <= len(t) && 0 <= xo && 0 <= xl && xo + xl <= len(x)
+{
+  let l: i64 = e - q - 2;
+  if l != xl { return false; }
+  return eq_range(t, q + 2, x, xo, l);
+}
+
+// Is the field [q, e) equal to the whole of x?
+fn feqs(t: str, q: i64, e: i64, x: str) -> bool
+  requires 0 <= q && q + 2 <= e && e <= len(t)
+{
+  let l: i64 = e - q - 2;
+  if l != len(x) { return false; }
+  return eq_range(t, q + 2, x, 0, l);
+}
+
+// Slot key [q, e): is the part before the first ':' equal to engine (hand `slot.split(':').next()`)?
+fn slot_is(t: str, q: i64, e: i64, engine: str) -> bool
+  requires 0 <= q && q + 2 <= e && e <= len(t)
+{
+  let mut k: i64 = q + 2;
+  while k < e
+    invariant q + 2 <= k && k <= e && e <= len(t)
+    decreases e - k
+  {
+    if t[k] == 58 { break; }
+    k = k + 1;
+  }
+  let l: i64 = k - q - 2;
+  if l != len(engine) { return false; }
+  return eq_range(t, q + 2, engine, 0, l);
+}
+
+// Walks one session's candidate fields starting at q (flag bits f). When check, reports whether a candidate equals
+// (engine, x[xo .. xo + xl]) in the hand order: ext thread, forks, cli (engine default "codex"), engine threads.
+// Returns the end of the session (>= q0) when nothing matched, -(end) - 10 for a match (one walk both skips and
+// answers), -2 for a malformed observation.
+fn cands(t: str, q0: i64, f: i64, check: bool, engine: str, x: str, xo: i64, xl: i64) -> i64
+  requires 0 <= q0 && q0 <= len(t) && len(t) <= 1000000000000 && 0 <= f && f <= 15
+  requires 0 <= xo && 0 <= xl && xo + xl <= len(x)
+  ensures result == -2 || (q0 <= result && result <= len(t)) || (-len(t) - 10 <= result && result <= -q0 - 10)
+{
+  let mut q: i64 = q0;
+  let mut hit: bool = false;
+  if f % 4 >= 2 {
+    let ee: i64 = fend(t, q);
+    if ee < 0 { return -2; }
+    let eng: bool = check && feqs(t, q, ee, engine);
+    let te: i64 = fend(t, ee);
+    if te < 0 { return -2; }
+    if eng && feq(t, ee, te, x, xo, xl) { hit = true; }
+    let nf: i64 = fcount(t, te);
+    if nf < 0 { return -2; }
+    q = te + 2;
+    let mut k: i64 = 0;
+    while k < nf
+      invariant 0 <= k && k <= nf && q0 <= q && q <= len(t)
+      decreases nf - k
+    {
+      let fe: i64 = fend(t, q);
+      if fe < 0 { return -2; }
+      if eng && !hit && feq(t, q, fe, x, xo, xl) { hit = true; }
+      q = fe;
+      k = k + 1;
+    }
+  }
+  if f % 8 >= 4 {
+    let mut ceng: bool = false;
+    if f >= 8 {
+      let ce: i64 = fend(t, q);
+      if ce < 0 { return -2; }
+      ceng = check && feqs(t, q, ce, engine);
+      q = ce;
+    } else {
+      ceng = check && len(engine) == 5 && eq_range(engine, 0, "codex", 0, 5);
+    }
+    let ct: i64 = fend(t, q);
+    if ct < 0 { return -2; }
+    if ceng && !hit && feq(t, q, ct, x, xo, xl) { hit = true; }
+    q = ct;
+  }
+  let ns: i64 = fcount(t, q);
+  if ns < 0 { return -2; }
+  q = q + 2;
+  let mut k: i64 = 0;
+  while k < ns
+    invariant 0 <= k && k <= ns && q0 <= q && q <= len(t)
+    decreases ns - k
+  {
+    let se: i64 = fend(t, q);
+    if se < 0 { return -2; }
+    let ie: i64 = fend(t, se);
+    if ie < 0 { return -2; }
+    if check && !hit && slot_is(t, q, se, engine) && feq(t, se, ie, x, xo, xl) { hit = true; }
+    q = ie;
+    k = k + 1;
+  }
+  if hit { return -q - 10; }
+  return q;
+}
+
+// boundSessionId over one fresh observation t: the first session that is not temporary (flag, then the host's
+// isTemporary, asked for every non-flagged session in order) and has a candidate equal to (engine, thread).
+// Returns the offset of that session's id field (>= 1), -1 for none (or a match with an empty id), -2 when the
+// observation is a host failure or malformed.
+fn bound_in(t: str, engine: str, x: str, xo: i64, xl: i64) -> i64 ! io
+  requires len(t) <= 1000000000000 && 0 <= xo && 0 <= xl && xo + xl <= len(x)
+  ensures result >= -2 && result < len(t)
+{
+  let n: i64 = len(t);
+  if n < 1 { return -2; }
+  if t[0] != 48 { return -2; }
+  let mut p: i64 = 1;
+  let mut i: i64 = 0;
+  while p < n
+    invariant 1 <= p && p <= n && 0 <= i && i <= p && n == len(t)
+    decreases n - p
+  {
+    let f: i64 = t[p] - 64;
+    if f < 0 || f > 15 { return -2; }
+    let ide: i64 = fend(t, p + 1);
+    if ide < 0 { return -2; }
+    let tte: i64 = fend(t, ide);
+    if tte < 0 { return -2; }
+    let mut skip: bool = f % 2 == 1;
+    if !skip { skip = rg_is_temporary(i); }
+    let r: i64 = cands(t, tte, f, !skip, engine, x, xo, xl);
+    if r == -2 { return -2; }
+    if r < 0 {
+      if ide == p + 3 { return -1; }
+      return p + 1;
+    }
+    if r <= p { return -2; }
+    p = r;
+    i = i + 1;
+  }
+  return -1;
+}
+
+// The title field offset of the last session in t whose id equals s[so .. so + sl] (hand: a map from one
+// observation, last write wins), or -1.
+fn title_in(t: str, s: str, so: i64, sl: i64) -> i64
+  requires len(t) <= 1000000000000 && 0 <= so && 0 <= sl && so + sl <= len(s)
+  ensures result >= -1 && result < len(t)
+{
+  let n: i64 = len(t);
+  if n < 1 { return -1; }
+  let mut p: i64 = 1;
+  let mut found: i64 = -1;
+  while p < n
+    invariant 1 <= p && p <= n && n == len(t) && found >= -1 && found < n
+    decreases n - p
+  {
+    let f: i64 = t[p] - 64;
+    if f < 0 || f > 15 { return -1; }
+    let ide: i64 = fend(t, p + 1);
+    if ide < 0 { return -1; }
+    let tte: i64 = fend(t, ide);
+    if tte < 0 { return -1; }
+    if feq(t, p + 1, ide, s, so, sl) { found = ide; }
+    let r: i64 = cands(t, tte, f, false, "", "", 0, 0);
+    if r < 0 { return -1; }
+    if r <= p { return -1; }
+    p = r;
+  }
+  return found;
+}
+
+// engine-import-list after the read: one titles observation, then per item a fresh boundSessionId and one row.
+// Returns the row count, -2 for a failed or malformed session observation, -3 for a failed or malformed item list.
+pub fn rg_list(engine: str) -> i64 ! alloc, io
+{
+  let items: str = string_into_str(rg_items());
+  let ni: i64 = len(items);
+  if ni < 1 { return -3; }
+  if items[0] != 48 { return -3; }
+  if ni > 1000000000000 { return -3; }
+  let titles: str = string_into_str(rg_sessions());
+  if len(titles) < 1 { return -2; }
+  if titles[0] != 48 { return -2; }
+  if len(titles) > 1000000000000 { return -2; }
+  let mut p: i64 = 1;
+  let mut j: i64 = 0;
+  while p < ni
+    invariant 1 <= p && p <= ni && ni == len(items) && 0 <= j && j <= p
+    decreases ni - p
+  {
+    let the: i64 = fend(items, p);
+    if the < 0 { return -3; }
+    let tie: i64 = fend(items, the);
+    if tie < 0 { return -3; }
+    let snap: str = string_into_str(rg_sessions());
+    if len(snap) > 1000000000000 { return -2; }
+    let b: i64 = bound_in(snap, engine, items, p + 2, the - p - 2);
+    if b == -2 { return -2; }
+    if b >= 1 {
+      let ie: i64 = fend(snap, b);
+      if ie < 0 { return -2; }
+      let tq: i64 = title_in(titles, snap, b + 2, ie - b - 2);
+      let mut use_session: bool = false;
+      let mut te: i64 = -2;
+      if tq >= 0 {
+        te = fend(titles, tq);
+        if te >= tq + 3 { use_session = true; }
+      }
+      if use_session {
+        rg_row(j, snap, b + 2, ie - b - 2, titles, tq + 2, te - tq - 2);
+      } else {
+        rg_row(j, snap, b + 2, ie - b - 2, items, the + 2, tie - the - 2);
+      }
+    } else {
+      rg_row(j, snap, 0, -1, items, the + 2, tie - the - 2);
+    }
+    p = tie;
+    j = j + 1;
+  }
+  return j;
+}
+
+// engine-import-open after the account step: boundSessionId (hit -> existing), read, cancel check, race re-check
+// on a fresh observation (hit -> existing), then create. Returns 1 existing, 0 created, -2 failed or malformed
+// session observation, -4 cancelled, -5 read failure.
+pub fn rg_open(engine: str, thread: str) -> i64 ! alloc, io
+{
+  let snap: str = string_into_str(rg_sessions());
+  if len(snap) > 1000000000000 { return -2; }
+  let b: i64 = bound_in(snap, engine, thread, 0, len(thread));
+  if b == -2 { return -2; }
+  if b >= 1 {
+    let ie: i64 = fend(snap, b);
+    if ie < 0 { return -2; }
+    rg_existing(snap, b + 2, ie - b - 2);
+    return 1;
+  }
+  let turns: i64 = rg_read(thread);
+  if turns < 0 { return -5; }
+  if rg_cancelled() { return -4; }
+  let race: str = string_into_str(rg_sessions());
+  if len(race) > 1000000000000 { return -2; }
+  let b2: i64 = bound_in(race, engine, thread, 0, len(thread));
+  if b2 == -2 { return -2; }
+  if b2 >= 1 {
+    let ie2: i64 = fend(race, b2);
+    if ie2 < 0 { return -2; }
+    rg_existing(race, b2 + 2, ie2 - b2 - 2);
+    return 1;
+  }
+  rg_create(thread, turns);
+  return 0;
+}
