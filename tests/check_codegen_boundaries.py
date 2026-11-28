@@ -3,7 +3,7 @@
 The numbers below are hard-coded on purpose (never read from pruvc/data/*.json), so a wrong
 JSON value makes this test fail.
 
-    INLINE_SMALL=8, INLINE_BUDGET=1500   (inline_policy.json)
+    INLINE_SMALL=8   (inline_policy.json; SPEC R-7-3: small or single call site, no copy budget)
     MAX_TYPE_APPS=4096, MAX_TYPE_NODES=65536   (mono_limits.json)
 
 Usage: python tests/check_codegen_boundaries.py WORK (--py|--rs) PATH
@@ -19,7 +19,7 @@ sys.path.insert(0, str(HERE))
 import compiler_driver as CD  # noqa: E402
 
 INLINE_SMALL = 8
-INLINE_BUDGET = 1500
+LARGE_BODY = 1501
 MAX_TYPE_APPS = 4096
 MAX_TYPE_NODES = 65536
 
@@ -117,8 +117,8 @@ def main(work, kind, path):
     cases = [
         ("inline_small_8", lambda n: check_inline(drv, work, n, INLINE_SMALL, 189, "#[inline(always)]")),
         ("inline_small_9", lambda n: check_inline(drv, work, n, INLINE_SMALL + 1, 189, "#[inline]")),
-        ("inline_budget_1500", lambda n: check_inline(drv, work, n, INLINE_BUDGET, 2, "#[inline(always)]")),
-        ("inline_budget_1501", lambda n: check_inline(drv, work, n, INLINE_BUDGET + 1, 2, "#[inline]")),
+        ("inline_single_site_large", lambda n: check_inline(drv, work, n, LARGE_BODY, 1, "#[inline(always)]")),
+        ("inline_two_sites_large", lambda n: check_inline(drv, work, n, LARGE_BODY, 2, "#[inline]")),
         ("type_apps_4096", lambda n: check_apps_ok(drv, work, n)),
         ("type_apps_4097", lambda n: check_limit_reject(
             drv, work, n, apps_source(MAX_TYPE_APPS + 1),
