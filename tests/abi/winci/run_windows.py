@@ -123,10 +123,11 @@ def main():
                     rc, so, se = run([str(exe)], timeout=120)
                     rows.append((caller, "OK" if rc == 0 else "FAIL", tail(so, se, n=600).replace("\n", " | ")))
                     if stem == "p12d_narrow":
-                        for n in (-1, 2**40 + 1):
-                            rc, so, se = run([str(exe), str(n)])
-                            ok = rc == 101 and not so and f"pruv: invalid representation: {n} (array length)" in se
-                            rows.append((f"{caller}({n})", "OK" if ok else "FAIL", tail(so, se)))
+                        for entry in ("two", "one"):
+                            for n in (-1, 2**40 + 1):
+                                rc, so, se = run([str(exe), entry, str(n)])
+                                ok = rc == 101 and not so and f"pruv: invalid representation: {n} (array length)" in se
+                                rows.append((f"{caller}({entry},{n})", "OK" if ok else "FAIL", tail(so, se)))
     finally:
         if not a.keep:
             shutil.rmtree(work, ignore_errors=True)

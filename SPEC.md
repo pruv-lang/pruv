@@ -2920,7 +2920,8 @@ read by the checker, the verifier and both backends.
   bundle: `u8`/`u16` as a type argument (`Option<u8>`, `Vec<u16>`, generics; P11) or an enum payload (P11), stage
   `parse` or `type`; any integer type other than `i64`, or `[u16]`, in the signature of a trusted rust (foreign)
   function (P12, stage `parse`, or `type` for a `[u16]` nested in another type); and, on the LLVM backend, the host-facing positions
-  that R-6p-9 does not lift (stage `codegen`;
+  that R-6p-9 lists as still rejected with this code (stage `codegen`; fixed arrays, scalar `inout` and an owned
+  `Vec<T>` keep their own codes there;
   a private function or a child-module `pub` function whose signature holds such a type, directly or inside a struct,
   is never a host entry). Since P3 the integer types `u32 i32 usize isize u64 i8 i16` exist (R-6p-5), and
   indexes and `decreases` measures follow R-6p-5. Tests: [accept](tests/spec/r6p_3_accept.pruv),
@@ -2979,8 +2980,8 @@ read by the checker, the verifier and both backends.
   `inout` of any integer width at a host entry stays `type/entry_signature` (R-6g-4). A fixed-length array `[T; N]` at
   a host entry stays `type/fixed_array_position`. Still rejected with
   `small_int_unsupported`: such a type in a trusted rust fn signature (stage
-  `parse`, or `type` for a nested `[u16]`) and, on the LLVM backend including its Rust bindings, the positions R-6p-9
-  does not lift (stage `codegen`). A child-module `pub` function is not a host entry, so on
+  `parse`, or `type` for a nested `[u16]`) and, on the LLVM backend including its Rust bindings, the integer, `char` and `[u16]` positions R-6p-9
+  lists as still rejected (stage `codegen`; fixed arrays, scalar `inout` and owned `Vec<T>` keep the codes named there). A child-module `pub` function is not a host entry, so on
   LLVM it keeps such types like any internal function. Tests: [accept](tests/spec/r6p_6_host_accept.pruv),
   [requires](tests/spec/r6p_6_host_requires.pruv), [module](tests/spec/r6p_6_host_module/root.pruv),
   [requires reads an element](tests/spec/r6p_6_host_requires_elem.pruv), [trust callers](tests/spec/r6p_6_host_trust.pruv),
@@ -3038,7 +3039,7 @@ read by the checker, the verifier and both backends.
   `const uint16_t *sid, int64_t sid_len`, and return an owned `[u16]` through the array return rule (`void` plus a
   last out pointer to `{ uint16_t *data, int64_t len }`). An eligible public struct with such fields keeps the word
   serialization in field order, one 64-bit word per integer field, sign- or zero-extended on write and truncated to
-  the declared width on read. On x86-64 SysV (every non-Windows target) the 8- and 16-bit parameters and results of
+  the declared width on read. On SysV (x86-64 Linux and aarch64 Apple, the non-Windows targets `--target` accepts) the 8- and 16-bit parameters and results of
   the `pruv_abi_*` wrapper carry `zeroext` (unsigned) or `signext` (signed); on WinX64 no such attribute is set and
   only the declared width is read. `--rust-bindings` declares the same widths, `&[u16]` for a read slice and
   `Vec<u16>` for a result (taken over with `Vec::from_raw_parts`, freed by `Drop`; an empty result is `Vec::new()`).
@@ -3048,15 +3049,18 @@ read by the checker, the verifier and both backends.
   surrogates included, pass unchanged. A result whose capacity differs from its length is shrunk with
   `pruv_shrink_v2(data, cap, len, 2, 2)` before the handoff; the C caller frees a non-empty result once. Still
   rejected: `take` and `inout` `[u16]`, a `[u16]` struct field and `char` at an LLVM host entry, a narrow integer in
-  a G9 extended signature, a `raw_entries="c"` program or a trusted rust fn signature, and standalone C bindings
-  (`codegen/small_int_unsupported`); an owned general `Vec<T>` (`codegen/unsupported_type`); fixed arrays
+  a G9 extended signature or a `raw_entries="c"` program, and the standalone binding generator of an explicit
+  entry (`codegen/small_int_unsupported`); a trusted rust fn signature (`parse`, or `type` for a nested `[u16]`,
+  R-6p-3); an owned general `Vec<T>` (`codegen/unsupported_type`); fixed arrays
   (`type/fixed_array_position`); scalar `inout` (`type/entry_signature`); tuples (`codegen/tuple_host_unsupported`,
   P12e). Cost: scalars, slice borrows and the result handoff O(1), no input element copied; struct conversion linear
   in its words; at most one O(output) copy when the shrink reallocates.
   Tests: [accept](tests/spec/r6p_9_narrow.pruv), [legacy entry](tests/spec/r6p_9_legacy.pruv),
   [inout reject](tests/spec/r6p_9_inout.pruv), [owned Vec reject](tests/spec/r6p_9_owned_vec.pruv),
   [take reject](tests/spec/r6p_6_host_reject_llvm.pruv), [field reject](tests/spec/r6p_6_host_reject_llvm_field.pruv),
-  [C caller, lengths and x86-64 IR](tests/abi/check_narrow_host.py), [WinX64](tests/abi/winci/src/p12d_narrow.pruv).
+  [G9 extended reject](tests/spec/r6p_9_reject_ext.pruv), [char reject](tests/must_reject/g2a_scalar_i32.pruv),
+  [trusted rust fn reject](tests/spec/r6p_6_host_reject_foreign.pruv), [raw entries reject](tests/must_reject/r6p_9_raw_u8.pruv),
+  [C caller, lengths on the one- and two-buffer paths, x86-64 IR of every width](tests/abi/check_narrow_host.py), [WinX64](tests/abi/winci/src/p12d_narrow.pruv).
 
 ## 6q. For loops (P4)
 ```

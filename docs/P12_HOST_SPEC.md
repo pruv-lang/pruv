@@ -144,7 +144,7 @@ used by its bare name.
 | read `sid: [u16]` | `const uint16_t *sid, int64_t sid_len` | `sid: &[u16]` |
 | owned result `-> [u16]` | `void` plus a last `PruvArrayU16 *out` (`uint16_t *data`, `int64_t len`) | `-> Vec<u16>` |
 
-- Representation. Direct parameters and results use an LLVM integer of the declared width. On x86-64 SysV the 8- and
+- Representation. Direct parameters and results use an LLVM integer of the declared width. On SysV (x86-64 Linux, aarch64 Apple) the 8- and
   16-bit values carry `zeroext` (unsigned) or `signext` (signed) on both the call and the definition, as Clang emits;
   on WinX64 no such attribute is set and only the low bits of the declared width are used. Neither side assumes the
   whole 64-bit register is extended.
@@ -175,16 +175,16 @@ used by its bare name.
 
 ## P12e LLVM value tuples (design)
 
-A value tuple is a tuple whose components, after alias expansion, are all scalars admitted by P12d (`i64`, `bool`, the
-fixed-width integers), eligible public structs, or value tuples. Tuple identity is the P12b rule (resolved component
+A value tuple is a tuple whose components, after alias expansion, are all scalars admitted by P12d (`i64`, `bool`,
+`u8 u16 u32 u64 usize i8 i16 i32 isize`; not `char`), eligible public structs, or value tuples. Tuple identity is the P12b rule (resolved component
 types), so the same tuple named from two modules has one layout.
 
 | Pruv position | C prototype of the LLVM host entry | Generated Rust binding |
 |---|---|---|
 | parameter `p: (A, B, ..)` | `const int64_t *p_words` | `p: (A, B, ..)` |
 | result `-> (A, B, ..)` | `void` plus a last `int64_t *out_words` | `-> (A, B, ..)` |
-| struct field `f: (A, B, ..)` | the field's words inlined in the struct words, in field order | the Rust tuple |
-| nested tuple / struct component | the component's words inlined, depth first | the Rust tuple |
+| struct field `f: (A, B, ..)` | the field's words inlined in the struct words, in field order | `f: (A, B, ..)` |
+| nested tuple / struct component | the component's words inlined, depth first | the Rust tuple / struct of that component, e.g. `(crate::a::Pair, i64)` |
 
 - Representation. A tuple uses the existing aggregate word serialization of P12d structs: components in order, one
   64-bit word per scalar component (`bool` as 0/1, narrow integers sign- or zero-extended on write and truncated on

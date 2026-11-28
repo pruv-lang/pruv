@@ -21,8 +21,13 @@ extern int32_t pruv_abi_id_i32(int32_t);
 extern int64_t pruv_abi_id_isize(int64_t);
 
 int main(int argc, char **argv) {
-    if (argc == 2) {
-        printf("%lld\n", (long long)pruv_abi_checked_length(NULL, 0, NULL, strtoll(argv[1], NULL, 10)));
+    if (argc == 3) {
+        /* argv[1] picks the entry: "two" (two buffers, slow path) or "one" (single buffer). */
+        int64_t n = strtoll(argv[2], NULL, 10);
+        if (argv[1][0] == 't')
+            printf("%lld\n", (long long)pruv_abi_checked_length(NULL, 0, NULL, n));
+        else
+            printf("%lld\n", (long long)pruv_abi_length(NULL, n));
         return 0;
     }
     assert(pruv_abi_id_u8(0) == 0);
@@ -47,8 +52,8 @@ int main(int argc, char **argv) {
     int64_t words[] = {-1, 0x18000, -1}, out[3];
     pruv_abi_round_trip(words, out);
     assert(out[0] == 255 && out[1] == INT16_MIN && out[2] == -1);
-    assert(pruv_abi_length(NULL, INT64_C(1) << 40) == (INT64_C(1) << 40));
     uint16_t sid[] = {0xD800, 0xFFFF};
+    assert(pruv_abi_length(sid, 2) == 2);
     PruvArrayU16 result;
     pruv_abi_units(255, -1, UINT64_MAX, NULL, 0, &result);
     assert(result.len == 0);

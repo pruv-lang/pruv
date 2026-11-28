@@ -4233,6 +4233,7 @@
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "/tmp/pruv_p2_u16_pub_sig_bindings.rs"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p2_u16_pub_sig.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "/tmp/pruv_p6_llvm_owned_bindings.rs"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p6_llvm_owned.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "ll", "--rust-bindings", "r6p_8_rejected_bindings.rs"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/r6p_8_llvm.pruv"}
+{"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "obj", "--manifest", "tests/must_reject/r6p_9_raw_manifest.json"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/r6p_9_raw_u8.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "obj"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/g2a_scalar_i32.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--backend", "llvm", "--emit", "obj"], "group": "must_reject", "mode": null, "sample": "tests/must_reject/p12b_llvm_tuple.pruv"}
 {"backend": null, "compiler": "rs", "flags": ["--emit", "exe"], "group": "g8_frontend", "mode": "exe", "only_compiler": "rs", "sample": "tests/g8/frontend/catalog/root.pruv"}

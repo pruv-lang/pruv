@@ -17,11 +17,19 @@ def check(work, compiler):
     for target in ("x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"):
         subprocess.run(emit + ["--target", target], check=True)
         lines = ir.read_text().splitlines()
-        for name, width, ext in (("u8", "i8", "zeroext"), ("i16", "i16", "signext")):
+        sysv = target.endswith("gnu")
+        for name, width, ext in (("u8", "i8", "zeroext"), ("u16", "i16", "zeroext"), ("i8", "i8", "signext"),
+                                 ("i16", "i16", "signext"), ("u32", "i32", ""), ("i32", "i32", ""),
+                                 ("u64", "i64", ""), ("usize", "i64", ""), ("isize", "i64", "")):
             ret, param = width, width
-            if target.endswith("gnu"):
+            if sysv and ext:
                 ret, param = f"{ext} {width}", f"{width} {ext}"
-            assert f"define {ret} @pruv_abi_id_{name}({param} %a.x) {{" in lines, target
+            assert f"define {ret} @pruv_abi_id_{name}({param} %a.x) {{" in lines, (target, name)
+        a, b = ("i8 zeroext", "i16 signext") if sysv else ("i8", "i16")
+        assert (f"define void @pruv_abi_units({a} %a.a, {b} %a.b, i64 %a.c, ptr %a.sid.a, i64 %a.sid.n, ptr %out) {{"
+                in lines), target
+        # Single-buffer length bound: 2^40 is accepted, anything above (or negative, as unsigned) is not.
+        assert "  %ln.p0 = icmp ugt i64 %a.sid.n, 1099511627776" in lines, target
     for flags in ([], ["--trust-callers"]):
         subprocess.run(emit + flags, check=True)
         subprocess.run(["clang", "-O2", "-DPRUV_COUNT_ALLOCS", ir, ROOT / "pruvc/runtime.c",
@@ -29,10 +37,11 @@ def check(work, compiler):
         normal = subprocess.run([exe], capture_output=True, text=True, check=True)
         balance = normal.stderr.split("pruv-alloc-balance: ")[1].split()
         assert int(balance[0]) > 0 and balance[0] == balance[1], normal.stderr
-        for n in (-1, 2**40 + 1):
-            child = subprocess.run([exe, str(n)], capture_output=True, text=True)
-            assert child.returncode == 101 and not child.stdout, child
-            assert f"pruv: invalid representation: {n} (array length)" in child.stderr, child
+        for entry in ("two", "one"):
+            for n in (-1, 2**40 + 1):
+                child = subprocess.run([exe, entry, str(n)], capture_output=True, text=True)
+                assert child.returncode == 101 and not child.stdout, child
+                assert f"pruv: invalid representation: {n} (array length)" in child.stderr, child
     print("narrow host ABI passed")
 
 

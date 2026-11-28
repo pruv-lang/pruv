@@ -1745,6 +1745,7 @@ must_reject|must_reject/r6p_8_vec_inout.pruv	2 cases: exit 2	llvm=4290877c8a6c	r
 must_reject|must_reject/r6p_8_vec_invariant.pruv	2 cases: exit 2	llvm=7b3a86a922b2	rust=7b3a86a922b2
 must_reject|must_reject/r6p_8_vec_nested.pruv	2 cases: exit 2	llvm=be65527a98ff	rust=be65527a98ff
 must_reject|must_reject/r6p_8_vec_u16.pruv	2 cases: exit 2	llvm=c2aeaf50b70b	rust=c2aeaf50b70b
+must_reject|must_reject/r6p_9_raw_u8.pruv	2 cases: exit 2	llvm=deb00c0204e8	rust=0cc698c0d485
 must_reject|must_reject/refine_alloc_len.pruv	2 cases: exit 2	llvm=91183d4f0e90	rust=91183d4f0e90
 must_reject|must_reject/refine_base_bool.pruv	2 cases: exit 2	llvm=345aab8fdc3a	rust=345aab8fdc3a
 must_reject|must_reject/refine_bounds_i64.pruv	2 cases: exit 2	llvm=f53a5fc811dd	rust=f53a5fc811dd
