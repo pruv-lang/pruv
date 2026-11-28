@@ -1,0 +1,77 @@
+// spec: R-6g9-18 accept
+struct Doc { source: ref [u8], tape: [i64] }
+enum Line { Object(doc: Doc), Skip }
+fn parse(data: [u8], lo: i64) -> Line from(data) ! alloc
+  requires 0 <= lo && lo <= len(data)
+{
+  if lo % 2 == 1 { return Line::Skip; }
+  let tape: [i64] = alloc(1, lo);
+  let doc: Doc = Doc { source: subview(data, lo, len(data)), tape: move tape };
+  return Line::Object(move doc);
+}
+fn weigh(d: Doc) -> i64
+  ensures 0 <= result && result <= 2000000
+{
+  if len(d.source) > 1000 || len(d.tape) < 1 { return 0; }
+  let t: i64 = d.tape[0];
+  if t < 0 || t > 1000 { return 0; }
+  return len(d.source) * 1000 + t;
+}
+fn has_tape(d: Doc) -> bool
+  ensures result == (len(d.tape) >= 1)
+{
+  return len(d.tape) >= 1;
+}
+fn last_index(d: Doc) -> i64
+  requires len(d.tape) >= 1
+  ensures 0 <= result && result < len(d.tape)
+{
+  return len(d.tape) - 1;
+}
+fn at(d: Doc, c: i64) -> i64
+  requires 0 <= c && c < len(d.tape)
+{
+  return d.tape[c];
+}
+fn replay(docs: Vec<Doc>) -> i64
+  requires len(docs) <= 1000
+  ensures 0 <= result && result <= 30000000000
+{
+  let mut s: i64 = 0;
+  let mut hits: i64 = 0;
+  let mut i: i64 = 0;
+  while i < len(docs)
+    invariant 0 <= i && i <= len(docs) && 0 <= s && s <= i * 2000000 && 0 <= hits && hits <= i
+    decreases len(docs) - i
+  {
+    s = s + weigh(vec_get::<Doc>(docs, i));
+    if has_tape(vec_get::<Doc>(docs, i)) {
+      let c: i64 = last_index(vec_get::<Doc>(docs, i));
+      if at(vec_get::<Doc>(docs, i), c) > 0 { hits = hits + 1; }
+    }
+    i = i + 1;
+  }
+  return s * 10 + hits;
+}
+fn run(data: [u8]) -> i64 ! alloc
+  requires len(data) <= 1000
+{
+  let mut docs: Vec<Doc> = vec_new::<Doc>();
+  let mut k: i64 = 0;
+  while k < len(data)
+    invariant 0 <= k && k <= len(data) && len(docs) <= k
+    decreases len(data) - k
+  {
+    let line: Line = parse(data, k);
+    match line {
+      Line::Object(d) => { docs = vec_push::<Doc>(move docs, move d); }
+      Line::Skip => {}
+    }
+    k = k + 1;
+  }
+  return replay(docs) * 10 + len(docs);
+}
+pub fn checksum() -> i64 ! alloc {
+  let data: [u8] = alloc(5, 6);
+  return run(data);
+}

@@ -122,6 +122,8 @@ pub struct ForeignGen {
     pub cur_pkg: Option<String>,
     /// G4b-2: package name ("" = program package) -> every catalog instance used by generated code
     pkg_catalog: BTreeMap<String, BTreeSet<(String, Vec<String>)>>,
+    /// R-6g9-18: borrowing structs; a Vec helper over one names the element's lifetime `'a`.
+    pub borrowing: HashSet<String>,
 }
 
 impl ForeignGen {
@@ -137,6 +139,7 @@ impl ForeignGen {
             op: String::new(),
             cur_pkg: None,
             pkg_catalog: BTreeMap::new(),
+            borrowing: HashSet::new(),
         }
     }
 
@@ -327,7 +330,13 @@ impl ForeignGen {
         self.record_pkg_catalog(op, src.iter().map(format_type).collect());
         if !self.has_item(&name) {
             self.op = op.to_string();
-            let text = self.catalog_text(op, &name, low, owned_payload, deque)?;
+            let mut text = self.catalog_text(op, &name, low, owned_payload, deque)?;
+            // R-6g9-18: `Vec<B<'a>>` of a borrowing struct B: the helper is generic over the borrowed lifetime.
+            if !deque && matches!(op, "vec_new" | "vec_push" | "vec_get") && low.len() == 1
+                && low[0].args.is_empty() && self.borrowing.contains(&low[0].name)
+            {
+                text = with_lifetime(&text, &name, &rty_g(&low[0], false));
+            }
             self.items.push((name.clone(), text));
             self.catalog.push((op.to_string(), src.iter().map(format_type).collect()));
         }
@@ -1282,4 +1291,23 @@ mod tests {
         dump_json(&doc, 0, &mut out);
         assert_eq!(out, "{\n  \"a\": [\n    \"x\\\"é\",\n    true,\n    3\n  ],\n  \"b\": []\n}");
     }
+}
+
+/// R-6g9-18: `fn name(..)` -> `fn name<'a>(..)` and every whole-word `ty` -> `ty<'a>`.
+fn with_lifetime(text: &str, name: &str, ty: &str) -> String {
+    let text = text.replacen(&format!("fn {name}("), &format!("fn {name}<'a>("), 1);
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut rest = text.as_str();
+    while let Some(i) = rest.find(ty) {
+        let before = rest[..i].chars().next_back();
+        let after = rest[i + ty.len()..].chars().next();
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        out.push_str(&rest[..i + ty.len()]);
+        if !word(before) && !word(after) {
+            out.push_str("<'a>");
+        }
+        rest = &rest[i + ty.len()..];
+    }
+    out.push_str(rest);
+    out
 }

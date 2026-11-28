@@ -2427,7 +2427,7 @@ impl Checker {
         if ty.view_payload().is_some() {
             return Ok(());
         }
-        if ty.name == "@ref" || ty.args.iter().any(|t| self.borrowed_type_argument(t)) {
+        if ty.name == "@ref" || (!self.doc_list_type(ty) && ty.args.iter().any(|t| self.borrowed_type_argument(t))) {
             return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
         }
         let ad = &self.arg_decls;
@@ -2645,6 +2645,13 @@ impl Checker {
             ));
         }
         self.check_type(line, col, e)
+    }
+
+    /// R-6g9-18: `Vec<B>` of a borrowing struct B (one level); borrowed.rs restricts where it appears.
+    fn doc_list_type(&self, ty: &GType) -> bool {
+        ty.owner.is_none() && ty.name == "vec" && ty.args.len() == 1 && ty.args[0].args.is_empty()
+            && ty.args[0].owner.is_none()
+            && self.decls.get(&ty.args[0].name).is_some_and(crate::borrowed::borrowing_struct)
     }
 
     fn borrowed_type_argument(&self, ty: &GType) -> bool {

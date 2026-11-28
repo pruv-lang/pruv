@@ -1,0 +1,8 @@
+// spec: R-6g9-18 reject
+struct Doc { source: ref [u8], tape: [i64] }
+fn count() -> i64 ! alloc {
+  return len(vec_new::<Doc>());
+}
+pub fn checksum() -> i64 ! alloc {
+  return count();
+}
