@@ -135,46 +135,12 @@ pub fn task_origin_of(doc: crate::json::JsonDocument, origin_raw: i64) -> i64 ! 
   return field_is(doc, o, "kind", "task-notification");
 }
 
-// 4.4s (4.4n-KL option 3): the root keys the three readers use, resolved in one walk over the root's members
-// (hand: `object()` builds the map in one pass, then each `get` costs one resolution). A slot holds what
-// `access::field(doc, 0, key)` returns: the value id of the last member with that key, -1 when missing, and the
-// same negative code in every slot when the walk finds a corrupt tape. No allocation: the slots are one value.
-pub struct RootKeys { ty: i64, timestamp: i64, side: i64, meta: i64, api: i64, message: i64, origin: i64, custom: i64, ai: i64, summary: i64, title: i64, cwd: i64, entrypoint: i64 }
-
-fn keys_all(v: i64) -> RootKeys
+// 4.4s (4.4n-KL option 3), 4.4s-FK: the root keys the three readers use, resolved in one walk over the root's
+// members by `access::fields` (hand: `object()` builds the map in one pass, then each `get` costs one resolution).
+// Slots: 0 `type`, 1 `timestamp`, 2 `isSidechain`, 3 `message`, 4 `isMeta`, 5 `isApiErrorMessage`, 6 `origin`, 7 `cwd`, 8 `entrypoint`, 9 `title`, 10 `customTitle`, 11 `aiTitle`, 12 `summary`.
+pub fn root_keys(doc: crate::json::JsonDocument) -> [i64; 13]
 {
-  return RootKeys { ty: v, timestamp: v, side: v, meta: v, api: v, message: v, origin: v, custom: v, ai: v, summary: v, title: v, cwd: v, entrypoint: v };
-}
-
-pub fn root_keys(doc: crate::json::JsonDocument) -> RootKeys
-{
-  let stop: i64 = crate::access::members_end(doc, 0);
-  if stop < 0 { return keys_all(stop); }
-  let mut k: RootKeys = keys_all(-1);
-  let mut j: i64 = 1;
-  while j < stop
-    invariant 0 < j && j <= stop && stop <= len(doc.tape) / 6
-    decreases stop - j
-  {
-    let n: i64 = crate::access::member_next(doc, 0, j, stop);
-    if n < 0 { return keys_all(-4); }
-    let v: i64 = j + 1;
-    if crate::access::key_is(doc, j, "type") { k.ty = v; }
-    else if crate::access::key_is(doc, j, "timestamp") { k.timestamp = v; }
-    else if crate::access::key_is(doc, j, "isSidechain") { k.side = v; }
-    else if crate::access::key_is(doc, j, "message") { k.message = v; }
-    else if crate::access::key_is(doc, j, "isMeta") { k.meta = v; }
-    else if crate::access::key_is(doc, j, "isApiErrorMessage") { k.api = v; }
-    else if crate::access::key_is(doc, j, "origin") { k.origin = v; }
-    else if crate::access::key_is(doc, j, "cwd") { k.cwd = v; }
-    else if crate::access::key_is(doc, j, "entrypoint") { k.entrypoint = v; }
-    else if crate::access::key_is(doc, j, "title") { k.title = v; }
-    else if crate::access::key_is(doc, j, "customTitle") { k.custom = v; }
-    else if crate::access::key_is(doc, j, "aiTitle") { k.ai = v; }
-    else if crate::access::key_is(doc, j, "summary") { k.summary = v; }
-    j = n;
-  }
-  return k;
+  return crate::access::fields(doc, 0, ["type", "timestamp", "isSidechain", "message", "isMeta", "isApiErrorMessage", "origin", "cwd", "entrypoint", "title", "customTitle", "aiTitle", "summary"]);
 }
 
 // A block of a content array: a text piece, an ignorable block, the tool_result veto, or a defect.
@@ -284,9 +250,9 @@ pub fn human_text(doc: crate::json::JsonDocument) -> Field ! alloc
   return human_text_of(doc, root_keys(doc));
 }
 
-pub fn human_text_of(doc: crate::json::JsonDocument, k: RootKeys) -> Field ! alloc
+pub fn human_text_of(doc: crate::json::JsonDocument, k: [i64; 13]) -> Field ! alloc
 {
-  let ty: i64 = string_of(doc, k.ty);
+  let ty: i64 = string_of(doc, k[0]);
   if ty == -1 { return Field::Missing; }
   if ty < 0 { return Field::Defect(ty); }
   let user: i64 = crate::access::string_is(doc, ty, "user");
@@ -296,15 +262,15 @@ pub fn human_text_of(doc: crate::json::JsonDocument, k: RootKeys) -> Field ! all
 }
 
 // The caller has already classified the entry as a user message.
-pub fn user_text(doc: crate::json::JsonDocument, k: RootKeys) -> Field ! alloc
+pub fn user_text(doc: crate::json::JsonDocument, k: [i64; 13]) -> Field ! alloc
 {
-  let meta: i64 = true_of(doc, k.meta);
+  let meta: i64 = true_of(doc, k[4]);
   if meta < 0 { return Field::Defect(meta); }
   if meta == 1 { return Field::Missing; }
-  let side: i64 = true_of(doc, k.side);
+  let side: i64 = true_of(doc, k[2]);
   if side < 0 { return Field::Defect(side); }
   if side == 1 { return Field::Missing; }
-  let msg: i64 = object_of(doc, k.message);
+  let msg: i64 = object_of(doc, k[3]);
   if msg == -1 { return Field::Missing; }
   if msg < 0 { return Field::Defect(msg); }
   let c: i64 = crate::access::field(doc, msg, "content");
@@ -312,8 +278,8 @@ pub fn user_text(doc: crate::json::JsonDocument, k: RootKeys) -> Field ! alloc
   if c < 0 { return Field::Defect(c); }
   let kc: i64 = crate::access::kind(doc, c);
   if kc < 0 { return Field::Defect(kc); }
-  if kc == 4 { return string_content(doc, k.origin, c); }
-  if kc == 5 { return array_content(doc, k.origin, c); }
+  if kc == 4 { return string_content(doc, k[6], c); }
+  if kc == 5 { return array_content(doc, k[6], c); }
   return Field::Missing;
 }
 
@@ -328,7 +294,7 @@ pub fn new_title() -> RankedTitle ! alloc
   return RankedTitle { rank: 0, text: move text };
 }
 
-// The bytes of a nonblank string value at field id `i` (an `access::field` result or a `RootKeys` slot) replace `buf` (hand `pick`, then `text.clear(); push_str(t)`).
+// The bytes of a nonblank string value at field id `i` (an `access::field` result or a `root_keys` slot) replace `buf` (hand `pick`, then `text.clear(); push_str(t)`).
 // 1 = written, 0 = missing or blank (`buf` unchanged), any other value = the defect kind (negative, or 18). The blank check runs on the borrowed view and
 // only a nonblank candidate is copied (4.4n); an escaped node is decoded first (the hand's `Cow::Owned`, made while
 // parsing).
@@ -398,12 +364,12 @@ pub fn title_of(doc: crate::json::JsonDocument, inout st: RankedTitle) -> i64 ! 
   ensures 0 <= st.rank && st.rank <= 3 && utf8_valid_span(st.text, 0, len(st.text))
   ensures old(st).rank <= st.rank
 {
-  let k: RootKeys = root_keys(doc);
-  return title_for_type(doc, string_of(doc, k.ty), k, inout st);
+  let k: [i64; 13] = root_keys(doc);
+  return title_for_type(doc, string_of(doc, k[0]), k, inout st);
 }
 
-// `ty` is `string_of(doc, k.ty)`, read once by the caller.
-pub fn title_for_type(doc: crate::json::JsonDocument, ty: i64, k: RootKeys, inout st: RankedTitle) -> i64 ! alloc
+// `ty` is `string_of(doc, k[0])`, read once by the caller.
+pub fn title_for_type(doc: crate::json::JsonDocument, ty: i64, k: [i64; 13], inout st: RankedTitle) -> i64 ! alloc
   requires crate::json::doc_strings(doc)
   requires 0 <= st.rank && st.rank <= 3 && utf8_valid_span(st.text, 0, len(st.text))
   ensures 0 <= st.rank && st.rank <= 3 && utf8_valid_span(st.text, 0, len(st.text))
@@ -416,21 +382,21 @@ pub fn title_for_type(doc: crate::json::JsonDocument, ty: i64, k: RootKeys, inou
   let pv: Option<ref str> = crate::access::plain_str(doc, ty);
   match pv {
     Some(t) => {
-      if len(t) == 12 && eq_range(t, 0, "custom-title", 0, 12) { return ranked(doc, 3, k.custom, k.title, inout st); }
-      if len(t) == 8 && eq_range(t, 0, "ai-title", 0, 8) { return ranked(doc, 2, k.ai, k.title, inout st); }
-      if len(t) == 7 && eq_range(t, 0, "summary", 0, 7) { return ranked(doc, 1, k.summary, k.title, inout st); }
+      if len(t) == 12 && eq_range(t, 0, "custom-title", 0, 12) { return ranked(doc, 3, k[10], k[9], inout st); }
+      if len(t) == 8 && eq_range(t, 0, "ai-title", 0, 8) { return ranked(doc, 2, k[11], k[9], inout st); }
+      if len(t) == 7 && eq_range(t, 0, "summary", 0, 7) { return ranked(doc, 1, k[12], k[9], inout st); }
       return 0;
     }
     None => {}
   }
   let a: i64 = crate::access::string_is(doc, ty, "custom-title");
   if a < 0 { return a; }
-  if a == 1 { return ranked(doc, 3, k.custom, k.title, inout st); }
+  if a == 1 { return ranked(doc, 3, k[10], k[9], inout st); }
   let b: i64 = crate::access::string_is(doc, ty, "ai-title");
   if b < 0 { return b; }
-  if b == 1 { return ranked(doc, 2, k.ai, k.title, inout st); }
+  if b == 1 { return ranked(doc, 2, k[11], k[9], inout st); }
   let c: i64 = crate::access::string_is(doc, ty, "summary");
   if c < 0 { return c; }
-  if c == 1 { return ranked(doc, 1, k.summary, k.title, inout st); }
+  if c == 1 { return ranked(doc, 1, k[12], k[9], inout st); }
   return 0;
 }

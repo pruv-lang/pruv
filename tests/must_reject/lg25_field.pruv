@@ -1,0 +1,2 @@
+struct Keys { keys: [str; 1] }
+fn bad() -> i64 { return 0; }

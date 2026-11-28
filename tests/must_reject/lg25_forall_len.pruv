@@ -1,0 +1,4 @@
+fn bad<const N: i64>(keys: [str; N]) -> i64 {
+  assert forall i in 0..len(keys): len(keys[i]) > 0;
+  return 0;
+}

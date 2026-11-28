@@ -429,6 +429,13 @@ pub fn lex_into(src: &[char], tag: usize, toks: &mut Vec<Tok>) -> Result<(), Pru
                 toks.push(Tok { kind, val: v, line, col, end });
                 continue;
             }
+            if v == "const" && (brace_depth == 0 || in_impl && brace_depth == 1)
+                && toks.last().is_some_and(|t| t.kind == Kind::Op && matches!(t.val.as_str(), "<" | ","))
+            {
+                let end = col + (pos - start) as i64;
+                toks.push(Tok { kind: Kind::Kw, val: v, line, col, end });
+                continue;
+            }
             // P7: `const` at item start (top level, after `}`, `;` or `pub`) is a keyword
             if v == "const" && brace_depth == 0
                 && toks.last().map_or(true, |t| (t.kind == Kind::Op && matches!(t.val.as_str(), "}" | ";"))

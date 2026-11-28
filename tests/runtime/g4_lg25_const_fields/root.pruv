@@ -1,0 +1,18 @@
+mod json;
+mod keys;
+
+pub fn run() -> bool {
+  let doc: crate::json::JsonDocument = crate::json::JsonDocument { valid: true, bad_member: false };
+  let bad: crate::json::JsonDocument = crate::json::JsonDocument { valid: true, bad_member: true };
+  let empty: [i64; 0] = crate::keys::fields(doc, 0, [""; 0]);
+  let one: [i64; 1] = crate::keys::fields(doc, 0, ["é"]);
+  let mixed: [i64; 4] = crate::keys::fields::<4>(doc, 0, ["", "é", "aa", "longer"]);
+  let again: [i64; 4] = crate::keys::fields(doc, 0, ["é", "x", "", "é"]);
+  let no_object: [i64; 1] = crate::keys::fields(doc, -1, [""]);
+  let bad_member: [i64; 1] = crate::keys::fields(bad, 0, [""]);
+  let width: i64 = crate::keys::length::<bool>([true, false]);
+  return len(empty) == 0 && len(one) == 1 && one[0] == 4
+    && mixed[0] == 2 && mixed[1] == 4 && mixed[2] == -1 && mixed[3] == -1
+    && again[0] == 4 && again[1] == -1 && again[2] == 2 && again[3] == 4
+    && no_object[0] == -3 && bad_member[0] == -4 && width == 2;
+}

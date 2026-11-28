@@ -1,0 +1,1 @@
+fn bad(keys: [str; 1]) -> i64 { match keys { [a] => { return 0; } } }

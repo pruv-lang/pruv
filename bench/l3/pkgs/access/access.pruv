@@ -141,6 +141,35 @@ pub fn key_is(doc: crate::json::JsonDocument, j: i64, key: str) -> bool
   let s: i64 = doc.tape[6 * j + 1]; let e: i64 = doc.tape[6 * j + 2];
   return may_match(doc.source, s, e, key) && crate::jstr::ascii_equal(doc.source, s, e, key);
 }
+
+// 4.4s-FK: a fixed key set read in one walk over object `id` (hand `fields<const N: usize>(b, at, keys: [&str; N])`).
+// Slot `i` holds what `field(doc, id, keys[i])` returns for an ASCII key: the value id of the last member with that
+// key, or -1; every slot holds the same negative code when `id` is not an object (-3 bad id, -2 another kind) or
+// the walk finds a corrupt tape (-4). No allocation: the slots are one value.
+pub fn fields<const N: i64>(doc: crate::json::JsonDocument, id: i64, keys: [str; N]) -> [i64; N]
+{
+  let stop: i64 = members_end(doc, id);
+  if stop < 0 { return [stop; N]; }
+  let mut r: [i64; N] = [-1; N];
+  let mut j: i64 = id + 1;
+  while j < stop
+    invariant 0 <= id && id < j && j <= stop && stop <= len(doc.tape) / 6
+    decreases stop - j
+  {
+    let n: i64 = member_next(doc, id, j, stop);
+    if n < 0 { return [-4; N]; }
+    let mut i: i64 = 0;
+    while i < len(keys)
+      invariant 0 <= i && i <= len(keys)
+      decreases len(keys) - i
+    {
+      if key_is(doc, j, keys[i]) { r[i] = j + 1; }
+      i = i + 1;
+    }
+    j = n;
+  }
+  return r;
+}
 fn is_ascii(key: str) -> bool
 {
   let mut i: i64 = 0;

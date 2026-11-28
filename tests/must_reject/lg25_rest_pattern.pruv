@@ -1,0 +1,1 @@
+fn first<const N: i64>(xs: [i64; N]) -> i64 { match xs { [a, ..] => { return a; } [..] => { return 0; } } }

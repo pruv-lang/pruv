@@ -1,0 +1,3 @@
+type Text = str;
+fn count<const N: i64>(keys: [Text; N]) -> i64 { return len(keys); }
+fn bad() -> i64 { let mut k: [Text; 1] = ["a"]; return count(k); }

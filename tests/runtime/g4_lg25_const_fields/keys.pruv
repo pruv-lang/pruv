@@ -1,0 +1,55 @@
+fn members_end(doc: crate::json::JsonDocument, id: i64) -> i64
+  ensures result < 0 || (id == 0 && result == 5)
+{
+  if doc.valid && id == 0 { return 5; }
+  return -3;
+}
+
+fn member_next(doc: crate::json::JsonDocument, id: i64, j: i64, stop: i64) -> i64
+  requires id == 0 && 1 <= j && j < stop && stop == 5
+  ensures result < 0 || (j < result && result <= stop)
+{
+  if doc.bad_member { return -1; }
+  if j == 1 { return 3; }
+  return stop;
+}
+
+fn key_is(doc: crate::json::JsonDocument, j: i64, key: str) -> bool {
+  if !doc.valid { return false; }
+  if j == 1 { return len(key) == 0; }
+  return j == 3 && len(key) == 2 && key[0] == 195 && key[1] == 169;
+}
+
+pub fn fields<const N: i64>(doc: crate::json::JsonDocument, id: i64, keys: [str; N]) -> [i64; N]
+  ensures len(result) == len(keys)
+{
+  let mut out: [i64; N] = [-1; N];
+  let stop: i64 = members_end(doc, id);
+  if stop < 0 { return [stop; N]; }
+  let mut j: i64 = id + 1;
+  while j < stop
+    invariant id == 0 && stop == 5 && 1 <= j && j <= stop
+    decreases stop - j
+  {
+    let n: i64 = member_next(doc, id, j, stop);
+    if n < 0 { return [-4; N]; }
+    let mut i: i64 = 0;
+    while i < len(keys)
+      invariant 0 <= i && i <= len(keys)
+      decreases len(keys) - i
+    {
+      if key_is(doc, j, keys[i]) {
+        out[i] = j + 1;
+      }
+      i = i + 1;
+    }
+    j = n;
+  }
+  return out;
+}
+
+pub fn length<T: Element, const N: i64>(values: [T; N]) -> i64
+  ensures result == len(values)
+{
+  return len(values);
+}

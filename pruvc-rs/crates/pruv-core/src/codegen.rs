@@ -2759,6 +2759,7 @@ impl<'a> Gen<'a> {
             // P7-1 B: a fixed-array field of a contract mirror struct is already `[i128; N]`
             Expr::FieldAccess(x) if x.ty.as_deref().is_some_and(|t| fixed_key(t).is_some()) => self.c(e),
             Expr::VariantField(x) if x.ty.as_deref().is_some_and(|t| fixed_key(t).is_some()) => self.c(e),
+            Expr::Index(x) if x.ty.as_deref() == Some("str") => self.c(e),
             // P7-1 B: a fixed-array literal in a contract is an array of contract values
             Expr::Call(x) if x.name == "@array" => {
                 let mut parts = Vec::new();
@@ -3131,7 +3132,7 @@ impl<'a> Gen<'a> {
                 }
                 if let Some(et) = aty.and_then(|t| GType::from_key(t).fixed_parts().map(|(e, _)| e.clone())) {
                     // P7-1 B: a fixed-length array read in a runtime contract, through a shared borrow
-                    let conv = if et.name == "bool" { "" } else { " as i128" };
+                    let conv = if matches!(et.name.as_str(), "bool" | "str") { "" } else { " as i128" };
                     return Ok(format!("{{ let pruv_a = &({}); let pruv_i: i128 = {}; if pruv_i >= 0 && pruv_i < pruv_a.len() as i128 {{ pruv_a[pruv_i as usize]{} }} else {{ pruv_ud(\"array index out of range\") }} }}", a, i, conv));
                 }
                 if aty == Some("string") {
@@ -5277,6 +5278,7 @@ pruv_hi <= (pruv_b.len() as i128) && \
     fn is_ref_value(&self, e: &Expr) -> bool {
         match e {
             Expr::Call(x) => x.name == "str_bytes" || self.fmap.get(&x.name).is_some_and(|f| f.borrowed_result && (f.ret == "array_u16" || crate::borrowed::is_view_base(&f.ret))),
+            Expr::Index(x) => expr_ty(&x.array).as_deref().and_then(fixed_key).is_some_and(|ty| ty.is_fixed_str()),
             Expr::FieldAccess(x) => expr_ty(&x.base).as_deref()
                 .and_then(|name| self.table.fields(name, None))
                 .is_some_and(|fields| fields.iter().any(|f| f.name == x.field && f.borrowed)),
@@ -6001,11 +6003,13 @@ pruv_hi <= (pruv_b.len() as i128) && \
             },
             Expr::Call(x) if crate::check::is_array_lit(&x.name) => {
                 // P7-1: `[a, b]` / `[x; N]` literals (the let annotation spells the element type)
+                let static_str = x.ty.as_deref().and_then(fixed_key).is_some_and(|ty| ty.is_fixed_str());
+                let mut element = |a: &Expr| if static_str { self.borrowed_value(a) } else { self.e(a) };
                 if let Some(n) = crate::ast::array_repeat_len(&x.name) {
-                    let v = self.e(arg(&x.args, 0)?)?;
+                    let v = element(arg(&x.args, 0)?)?;
                     return Ok(format!("[{v}; {n}]"));
                 }
-                let vs = x.args.iter().map(|a| self.e(a)).collect::<R<Vec<_>>>()?;
+                let vs = x.args.iter().map(element).collect::<R<Vec<_>>>()?;
                 Ok(format!("[{}]", vs.join(", ")))
             }
             Expr::Call(x) => {
@@ -8075,7 +8079,7 @@ mod tests {
         assert_eq!(crate::small::declared_bound(&p.functions[0]), Some(17));
         assert_eq!(crate::small::declared_bound(&p.functions[1]), None);
         let mut generic = p.functions[0].clone();
-        generic.tparams.push(TParam { line: 1, col: 1, name: "T".into(), bound: None });
+        generic.tparams.push(TParam { line: 1, col: 1, name: "T".into(), bound: None, const_limit: None });
         assert_eq!(crate::small::declared_bound(&generic), None);
     }
 
