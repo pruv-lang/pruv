@@ -1,0 +1,10 @@
+// spec: R-6o-5 reject
+// an opaque pred is contract-only: code cannot call it
+pub opaque pred fn ones(a: [i64], n: i64) -> bool {
+  return 0 <= n && n <= len(a) && (forall i in 0..n: a[i] == 1);
+}
+
+fn check(a: [i64]) -> bool {
+  return ones(a, len(a));
+}
+

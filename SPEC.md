@@ -324,7 +324,8 @@ Allowed only in `requires`, `ensures`, `invariant`, `assert`:
     Without `lo <= m <= hi` the fact is not used. Both verifiers try a query first without aggregate lemmas, then
     with them, and add the split only in a third attempt (LG20). In the Rust verifier a query whose goal reads an
     aggregate (other than a definedness goal) runs the lemma attempts first and the attempt without lemmas last
-    (L-gaps 23; the invariant search keeps the first order); each attempt is the same query, so only an attempt's resource limit can tell the orders apart. Tests: [split](tests/spec/r6_4_count_split.pruv),
+    (L-gaps 23; the invariant search keeps the first order). A goal applying a revealed opaque predicate whose body
+    reads an aggregate counts as reading one (L-gaps 24, R-6o-5); each attempt is the same query, so only an attempt's resource limit can tell the orders apart. Tests: [split](tests/spec/r6_4_count_split.pruv),
     [split point not in the range](tests/spec/r6_4_count_split_unbounded.pruv).
   - Example: `ensures result == count(k in 0..len(a): a[k] < x)` with
     `invariant c == count(k in 0..i: a[k] < x)`.
@@ -2795,7 +2796,11 @@ pub fn read(a: [i64], i: i64) -> i64
 - R-6o-2 **Callers see a symbol.** In every proof query an application `F(args)` is an uninterpreted `bool` symbol:
   facts that only carry it along (from `requires` to `ensures`, between equal arguments) need nothing more, and a
   code call of `F` gets no body fact (R-6-1). A proof that needs the body fails with the code of the failed
-  obligation (such as `verify/index_oob`) and a hint "opaque F is not revealed here; add reveal F; ...". At run
+  obligation (such as `verify/index_oob`) and a hint "opaque F is not revealed here; add reveal F; ...". One
+  exception: an application whose arguments mention a variable bound by an enclosing `forall`/`exists`/`count` is
+  its body instead of a symbol (an equation `F(args) == body` cannot mention a bound variable), so such a proof does
+  not need `reveal`; this is sound because the body is total (R-6o-4). Opaque calls inside that body stay symbols
+  unless their own arguments mention a bound variable, in which case the same exception expands them too. At run
   time (contract checks under `--no-verify`, host-entry `requires`) the body is evaluated as usual.
 - R-6o-3 **`reveal F;`** is a statement in a function body; `F` is resolved like a call path. From that point on the
   current proof path, applications of `F` equal its body. It does not reveal opaque functions that `F` calls. A
@@ -2811,9 +2816,20 @@ pub fn read(a: [i64], i: i64) -> i64
   for every argument, with no `requires` and no range assumption on its parameters, so a symbol never stands for an
   undefined value. A body that is not total is `verify/opaque_total`; guard reads with `&&` as above.
 
-Tests: [accept](tests/spec/r6o_1_opaque_bool.pruv) (all four rules);
+- R-6o-5 **`opaque pred fn`** (L-gaps 24) declares an opaque contract-only predicate: its body follows the `pred fn`
+  rules (section 6, R-6-2: it may quantify and `count`, and code cannot call it, `type/pred_in_code`) and R-6o-1..4
+  hold as for `opaque fn` (a symbol until `reveal`, the body proved total). It exists so a contract can name a
+  quantified fact that callers carry without reading it. After verification every application is replaced by its
+  body like any contract-only predicate, so no code is generated for it.
+
+Tests: [accept](tests/spec/r6o_1_opaque_bool.pruv) (all four rules), [accept R-6o-5](tests/spec/r6o_5_opaque_pred.pruv),
+[accept R-6o-5 zero-arg count](tests/spec/r6o_5_pred_count0.pruv), [run-time entry check](tests/runtime/lg24_opq_pred_entry.pruv);
 reject [R-6o-1](tests/spec/r6o_1_opaque_i64.pruv), [R-6o-2](tests/spec/r6o_2_no_reveal.pruv),
-[R-6o-3](tests/spec/r6o_3_reveal_target.pruv), [R-6o-4](tests/spec/r6o_4_total.pruv).
+[R-6o-3](tests/spec/r6o_3_reveal_target.pruv), [R-6o-4](tests/spec/r6o_4_total.pruv),
+R-6o-5 [code call](tests/spec/r6o_5_pred_code_call.pruv), [no reveal](tests/spec/r6o_5_pred_no_reveal.pruv),
+[not total](tests/spec/r6o_5_pred_total.pruv),
+[recursive](tests/spec/r6o_5_pred_recursive.pruv), [captured argument](tests/spec/r6o_5_pred_capture.pruv),
+[captured through a nested call](tests/spec/r6o_5_pred_capture_nested.pruv).
 
 ## 6p. Scalar integer widths (P1, P3)
 ```

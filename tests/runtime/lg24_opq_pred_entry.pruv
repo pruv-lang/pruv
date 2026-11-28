@@ -1,0 +1,13 @@
+// L-gaps 24 (R-6o-5): an opaque pred in a host-entry requires. After verification every application is replaced by
+// its body, so the run-time check evaluates the forall and the count; no code exists for the pred itself.
+pub opaque pred fn ones(a: [i64], n: i64) -> bool {
+  return 0 <= n && n <= len(a) && (forall i in 0..n: a[i] == 1) && count(k in 0..n: a[k] == 1) == n;
+}
+
+pub fn run(a: [i64]) -> i64
+  requires ones(a, len(a)) && len(a) > 0
+  ensures result == 1
+{
+  reveal ones;
+  return a[0];
+}

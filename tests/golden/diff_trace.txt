@@ -2009,6 +2009,7 @@ runtime|tests/runtime/lg23_ok_val_legacy.pruv	1 case: obl=22 1	default=f38215b54
 runtime|tests/runtime/lg23_old_elem.pruv	1 case: obl=24 1	default=9b918991fc68
 runtime|tests/runtime/lg23_payload_invariant.pruv	1 case: obl=32 1	default=183016f13560
 runtime|tests/runtime/lg24_generic_invariant.pruv	1 case: obl=39 1	default=655cd31a1acb
+runtime|tests/runtime/lg24_opq_pred_entry.pruv	1 case: obl=3 1	default=7d82a1468641
 runtime|tests/runtime/lg25_str_view.pruv	1 case: obl=297 1	default=b9128bbc604f
 runtime|tests/runtime/lg26_utf8_span.pruv	1 case: obl=42 1	default=3b3a2a9a3eb8
 runtime|tests/runtime/lg27_elem_inv.pruv	1 case: obl=67 1	default=da31240d9739

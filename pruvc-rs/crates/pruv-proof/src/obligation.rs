@@ -312,7 +312,7 @@ impl<'a> FnVerifier<'a> {
         }
         let mut relaxed: Option<Vec<(String, Json)>> = None;
         let (mut sol, mut r);
-        if self.agg_goal(ob, code) {
+        if self.agg_goal(ob, code, st) {
             // L-gaps 23: a goal that reads an aggregate starts with the lemmas (stage 1, then 2), so it does not spend
             // the stage-0 limit failing first. Stage 0 then runs last, only when the last lemma stage found no model:
             // its unsat is still a proof and its model is the relaxed counterexample, so the verdict, the error and
@@ -474,12 +474,18 @@ impl<'a> FnVerifier<'a> {
     /// Such a goal starts at the lemma stage (`prove_core_cand`; the invariant search keeps the old order). Definedness
     /// goals (`contract_domain`, `variant_domain`) keep the old order too: they are many and mostly prove at stage 0,
     /// even when one reads an aggregate (a divisor that is a `sum`).
-    fn agg_goal(&self, ob: &Ast, code: &str) -> bool {
+    /// L-gaps 24: so does a goal applying a revealed opaque function whose body reads one (`opq_agg`).
+    fn agg_goal(&self, ob: &Ast, code: &str, st: &State) -> bool {
         if self.lemmas.is_empty() || self.aggs.is_empty() || code == "contract_domain" || code == "variant_domain" {
             return false;
         }
         let names: HashSet<&str> = self.aggs.iter().map(|(_, f)| f.name()).collect();
-        ob.applies_any(&names)
+        if ob.applies_any(&names, 1) {
+            return true;
+        }
+        // an opaque symbol may take no argument (a constant `opq!F`)
+        let opq: Vec<String> = self.opq_agg.iter().filter(|n| st.rev.contains(*n)).map(|n| format!("opq!{}", n)).collect();
+        !opq.is_empty() && ob.applies_any(&opq.iter().map(|s| s.as_str()).collect(), 0)
     }
 
     /// verify.py inner `run(with_lemmas)` (lines 258-269): (solver, verdict).

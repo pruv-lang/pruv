@@ -1692,6 +1692,18 @@ impl Parser {
                 self.fn_pub.push(is_pub);
                 p.functions.push(f);
                 self.items.push(Item::Fn(p.functions.len() - 1));
+            } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "opaque" && self.peek(1).kind == Kind::Id
+                && self.peek(1).val == "pred" && self.at("fn", 2)
+            {
+                // R-6o-5: `opaque pred fn` is a contract-only predicate (its body may quantify) kept opaque until `reveal`
+                self.bump();
+                self.bump();
+                let mut f = self.function(None, is_pub)?;
+                f.opaque = true;
+                f.pred = true;
+                self.fn_pub.push(is_pub);
+                p.functions.push(f);
+                self.items.push(Item::Fn(p.functions.len() - 1));
             } else if self.peek(0).kind == Kind::Id && self.peek(0).val == "pred" && self.at("fn", 1) {
                 self.bump();
                 let mut f = self.function(None, is_pub)?;
