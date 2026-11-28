@@ -380,7 +380,10 @@ by byte-identical output and run by group, with the full test suite once before 
       (used by `diff_rust`, `diff_llvm`, `diff_parse`, `diff_trace`) prints GOLDEN NOT RUN and fails for a requested
       fuzz input that produced no case, a generator exception included; a forced exception at `(41, 3)` fails.
     - HC-6 `bench/l3/budget/m9_test/run_m9.py:395` returns known-difference for a whole record before the
-      event order and final state are compared; limit it to the number field.
+      event order and final state are compared; limit it to the number field. Done: a `{num}` value now only skips
+      that field (requested delay matches any delay, activeMs, due); X lines, event order and the other final fields
+      are compared. Every M9 Q set (Q3, Q3 clock, Q4, Q4 clock, stale; both lanes) keeps the M9_NOTES counts; a
+      `{num}` delay alone gives known-difference, the same with two timer events swapped gives 121 fails.
     - HC-7 `bench/l3/claude/entry.pruv:10` `parse_line` contract holds for an always-`Skip` body; add the
       success condition for a plain user line and a mutant in `q_mutants.py` that must be rejected by it.
     - HC-8 `.github/workflows/windows-abi.yml:7` path filter omits the compiler, so committed `.win.ll` can go

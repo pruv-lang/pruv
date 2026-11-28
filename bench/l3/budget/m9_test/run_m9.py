@@ -20,7 +20,8 @@ Classes:
                   halt: later clock-only steps cannot change a halted budget). The rest is not counted. Nothing
                   after the cut is filled by host code.
   known-difference KD-M6-1: the oracle holds a number outside the safe integral range (JS rounded it); excluded
-                  domain (spec §8.4), not compared.
+                  domain (spec §8.4). Only those number fields (requested delay, activeMs, due) are skipped;
+                  X lines, event order and the rest of the final state are compared, and a mismatch there fails.
   fail            anything else.
 
 dc checks --count randomized DROP/CLOSE cases plus one 20-cycle reclamation case for each run count from 0 to 12.
@@ -233,7 +234,8 @@ def oracle_events(o, cut):
             break
         a = obj(t.get("a")) if isinstance(t.get("a"), dict) else None
         if c == "timer.set":
-            ev.append("S %s %d" % (a["token"], a["delay"]))
+            # KD-M6-1: a delay outside the safe range ({num}) matches any delay; token and order still count
+            ev.append("S %s %s" % (a["token"], "*" if is_num(a["delay"]) else "%d" % a["delay"]))
         elif c == "timer.clear":
             ev.append("C %s" % a["token"])
         elif c == "timer.fire":
@@ -317,7 +319,7 @@ def compare_final(case, o, obs):
         used = obj(b["used"])
         if mine[0] != STATE[b["state"]]:
             diffs.append("state %s %s" % (mine[0], b["state"]))
-        if mine[3] != used["activeMs"]:
+        if not is_num(used["activeMs"]) and mine[3] != used["activeMs"]:
             diffs.append("activeMs %s %s" % (mine[3], used["activeMs"]))
         want = b.get("activeSince")
         if mine[4] == 0:
@@ -351,8 +353,10 @@ def compare_final(case, o, obs):
         got_clocks.append((k, owner, since if sp else None, timer, runs))
     if got_clocks != want_clocks:
         diffs.append("clocks %r != %r" % (got_clocks, want_clocks))
-    want_t = sorted((t["token"], t["due"]) for t in o["activeTimers"])
-    got_t = sorted((t[0], t[1]) for t in timers)
+    # KD-M6-1: a due time outside the safe range compares by token only
+    want_t = sorted((t["token"], None if is_num(t["due"]) else t["due"]) for t in o["activeTimers"])
+    skip = {t["token"] for t in o["activeTimers"] if is_num(t["due"])}
+    got_t = sorted((t[0], None if t[0] in skip else t[1]) for t in timers)
     if want_t != got_t:
         diffs.append("timers %r != %r" % (got_t, want_t))
     return diffs
@@ -384,12 +388,23 @@ def compare_halt(case, o, obs, h):
         at = text(obj(b["halt"])["at"]) if obj(b.get("halt")) else None
         if at != iso(int(t)):
             diffs.append("halt.at %r %r" % (iso(int(t)), at))
-        if mine[3] != obj(b["used"])["activeMs"]:
+        if not is_num(obj(b["used"])["activeMs"]) and mine[3] != obj(b["used"])["activeMs"]:
             diffs.append("activeMs %s %s" % (mine[3], obj(b["used"])["activeMs"]))
         if mine[4] != 0 or b.get("activeSince") is not None:
             diffs.append("activeSince kind %s %r" % (mine[4], b.get("activeSince")))
         return diffs
     return ["halted session missing"]
+
+
+def is_num(v):
+    """An oracle number outside the safe integral range ({num: bits}, KD-M6-1)."""
+    return isinstance(v, dict) and "num" in v
+
+
+def same_events(got, want):
+    """Event lists equal, where an oracle `S token *` (KD-M6-1 delay) matches any delay for that token."""
+    return len(got) == len(want) and all(
+        g == w or (w.endswith(" *") and g.rpartition(" ")[0] == w[:-2]) for g, w in zip(got, want))
 
 
 def unsafe_number(v):
@@ -414,10 +429,16 @@ def put_after_call(case, sk):
 
 
 def classify(case, o, run, cut, compared, halt_checked):
-    if unsafe_number(o):
+    cls, note = classify_compared(case, o, run, cut, compared, halt_checked)
+    if cls == "exact" and unsafe_number(o):
         # KD-M6-1: JS rounds arithmetic that leaves the safe range; Pruv keeps exact i64 (requested delay) or
-        # saturates (activeMs). Spec §8.4 makes it excluded-domain, so it is not compared.
+        # saturates (activeMs). Spec §8.4 makes it excluded-domain, so only those number fields are skipped
+        # (oracle_events, compare_final, compare_halt); X lines, event order and the rest of the state still count.
         return "known-difference", "KD-M6-1 unsafe arithmetic"
+    return cls, note
+
+
+def classify_compared(case, o, run, cut, compared, halt_checked):
     mine = [l for l in run["log"] if not l.startswith(("@", "I2 "))]
     xs = [l for l in mine if l.startswith("X")]
     if xs:
@@ -428,7 +449,7 @@ def classify(case, o, run, cut, compared, halt_checked):
         compared[l[0]] = compared.get(l[0], 0) + 1
     if "H" in ev:
         h = ev.index("H")
-        if want[:h + 1] != ev[:h + 1]:
+        if not same_events(ev[:h + 1], want[:h + 1]):
             return "fail", "events %r != %r" % (ev, want[:h + 2])
         if not cut and not put_after_call(case, tuple(int(x) for x in mine[h].split(" ")[2].split(",") if x)):
             d = compare_halt(case, o, run["obs"], mine[h])
@@ -436,7 +457,7 @@ def classify(case, o, run, cut, compared, halt_checked):
             if d:
                 return "fail", "at halt: " + "; ".join(d)
         return "not-implemented", "time halt (M10)"
-    if ev != want:
+    if not same_events(ev, want):
         return "fail", "events %r != %r" % (ev, want)
     if cut:
         reason = "raise/charge call" if cut[2] in ("raise", "charge") else "non-run call"
