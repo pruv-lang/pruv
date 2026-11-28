@@ -2938,3 +2938,16 @@ are placed. Two directions are still open:
 
 Separately, claude `parse::parse` still runs `json::check_subtrees` through `publication_ok`. That walk is the
 depth_limit cell in 4.4zf-KE (1.76-1.88x hand), so a 4.4l-CT fix should drop it on that path too.
+
+## L-gaps 28: 4.4l-CT, frame rule for counts (eighth attempt)
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4l-CT (G-DB33-1/2) | proof gap, open (cost) | Side branch `lair/pruv-l-gaps-28-ct-wip` (e4d1d4af, on 8e2b5e65). Direction (a), a frame rule for `count` over a range the call did not write, turned out to exist already: the LG4 `agg_frame` lemma (`pruv-proof/src/symbolic.rs`) pairs every two count functions of the same kind, arity and body shape, so `count` over the new tape and over `old(tape)` agree on a range unless a witness index in the range has different bodies. Each tape state is a separate count function (the body's array term is part of the aggregate key), and the frame needs no new verifier rule. What costs is closing the witness: showing `tape[6 * w + 4] == old(tape)[6 * w + 4]` for `w < m0` through `record`'s opaque tape. The attempt adds that prefix fact directly (`assert forall j in id + 1..m0: tape[6 * j + 4] == old(tape)[6 * j + 4]`) before `child`'s frame assert. Result: a5 verifies (rc 0), `run_a5.py` (two compiles plus fixtures) 21 / 21 s against 21 / 22 s for the attempt-7 sources, alternating, same compiler (a104b046 build). No gain. Not timed under the perf lock (load 3.7-4.0 from a test run), so the fresh-compile 8.8 s target was not re-measured | a5 only |
+
+Next direction for 4.4l-CT: (a) is closed; a second frame rule would duplicate `agg_frame`. What is left is (b): a
+per-record end slot written when a container closes, so `contained` is the range fact `id < k < end(id)` and the
+subtree property needs no count. It changes the tape layout (a seventh word or reuse of `skip`, which already holds
+the end record index for closed containers) and every `pkgs/parse` and `pkgs/access` user. Check first whether
+`skip` alone already gives `contained` as a range fact: `skip` is set on close and `json::check_tape` already checks
+it, so the count may only be needed for the child count itself, not for containment.
