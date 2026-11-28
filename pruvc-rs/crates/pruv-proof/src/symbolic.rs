@@ -2953,6 +2953,25 @@ impl<'a> FnVerifier<'a> {
                     &body,
                     &[vec![&fxm, &fmy], vec![&fxy, &fxm], vec![&fxy, &fmy]],
                 ));
+                // L-gaps 25 (R-6-4): a positive count has a witness, count(lo, hi) > 0 ==> lo <= w < hi && c(w) for
+                // the Skolem function w of this count. With `forall k in lo..hi: !c` it gives count == 0, a fact
+                // that otherwise needs induction. The instance adds no count term, so there is no matching loop.
+                let wint = z.int_sort();
+                let wdom: Vec<Sort> = (0..2 + outer.len()).map(|_| wint.clone()).collect();
+                let w = FuncDecl::new(&z, &format!("agg!w{}", f.name()), &wdom, &wint);
+                let mut wargs = vec![x.clone(), y.clone()];
+                wargs.extend(os.iter().cloned());
+                let wa = w.apply(&wargs);
+                let fapp = ap(&x, &y);
+                let mut wfrom = vec![k0.clone()];
+                let mut wto = vec![wa.clone()];
+                wfrom.extend(ps.iter().cloned());
+                wto.extend(os.iter().cloned());
+                let cw = tc.substitute(&wfrom, &wto);
+                let mut wbound = vec![x.clone(), y.clone()];
+                wbound.extend(os.iter().cloned());
+                let wbody = z.int(0).lt(&fapp).implies(&z.and(&[x.le(&wa), wa.lt(&y), cw]));
+                self.split_lemmas.push(z.forall(&wbound, &wbody, std::slice::from_ref(&fapp)));
             }
         }
 

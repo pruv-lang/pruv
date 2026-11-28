@@ -261,7 +261,7 @@ fn record(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, depth: i6
   ensures is_ok(result) ==> contained(tape, len(old(tape)) / 6 + 1, len(tape) / 6, len(old(tape)) / 6)
   ensures is_ok(result) ==> tree_ok(tape, len(old(tape)) / 6, len(tape) / 6)
   ensures is_ok(result) ==> starts_from(tape, len(old(tape)) / 6, len(tape) / 6, old(pos))
-  ensures is_ok(result) ==> (forall q in 0..len(old(tape)) / 6: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q) + count(k in len(old(tape)) / 6..len(old(tape)) / 6 + 1: parent == q))
+  ensures (is_ok(result) && (len(old(tape)) > 0 || parent == -1)) ==> count(k in parent + 1..len(tape) / 6: tape[6 * k + 4] == parent) == count(k in parent + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == parent) + 1
   decreases 5 * (129 - depth) + 2
 {
   let end: i64 = len(input);
@@ -327,7 +327,7 @@ fn open_container(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, d
   ensures is_ok(result) ==> contained(tape, len(old(tape)) / 6 + 1, len(tape) / 6, len(old(tape)) / 6)
   ensures is_ok(result) ==> tree_ok(tape, len(old(tape)) / 6, len(tape) / 6)
   ensures is_ok(result) ==> starts_from(tape, len(old(tape)) / 6, len(tape) / 6, old(pos))
-  ensures is_ok(result) ==> (forall q in 0..len(old(tape)) / 6: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q) + count(k in len(old(tape)) / 6..len(old(tape)) / 6 + 1: parent == q))
+  ensures (is_ok(result) && (len(old(tape)) > 0 || parent == -1)) ==> count(k in parent + 1..len(tape) / 6: tape[6 * k + 4] == parent) == count(k in parent + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == parent) + 1
   decreases 5 * (129 - depth) + 1
 {
   let start: i64 = pos;
@@ -342,6 +342,14 @@ fn open_container(input: [u8], inout pos: i64, inout tape: [i64], parent: i64, d
   reveal starts_from;
   let children: i64 = container(input, inout pos, inout tape, id, depth + 1, kind == 6)?;
   set_header(inout tape, id, start, pos, children, kind == 6);
+  if base > 0 || parent == -1 {
+    let m: i64 = len(tape) / 6;
+    assert forall j in id + 1..m: tape[6 * j + 4] != parent;
+    assert count(k in id + 1..m: tape[6 * k + 4] == parent) == 0;
+    assert count(k in parent + 1..m: tape[6 * k + 4] == parent) == count(k in parent + 1..id + 1: tape[6 * k + 4] == parent) + count(k in id + 1..m: tape[6 * k + 4] == parent);
+    assert count(k in parent + 1..id: tape[6 * k + 4] == parent) == count(k in parent + 1..id: old(tape)[6 * k + 4] == parent);
+    assert count(k in parent + 1..id + 1: tape[6 * k + 4] == parent) == count(k in parent + 1..id: tape[6 * k + 4] == parent) + count(k in id..id + 1: tape[6 * k + 4] == parent);
+  }
   return Ok::<(), crate::lex::Fault>(());
 }
 
@@ -362,7 +370,6 @@ fn set_header(inout tape: [i64], id: i64, s: i64, e: i64, c: i64, object: bool) 
   ensures len(tape) == len(old(tape))
   ensures forall i in 0..len(tape): ((i != 6 * id + 2 && i != 6 * id + 3 && i != 6 * id + 5) ==> tape[i] == old(tape)[i])
   ensures tape[6 * id + 2] == e && tape[6 * id + 3] == len(tape) / 6 && tape[6 * id + 5] == c
-  ensures forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(tape) / 6: old(tape)[6 * k + 4] == q)
   ensures contained(tape, id + 1, len(tape) / 6, id)
   ensures tree_ok(tape, id, len(tape) / 6)
 {
@@ -383,7 +390,6 @@ fn set_header(inout tape: [i64], id: i64, s: i64, e: i64, c: i64, object: bool) 
   assert object ==> (forall j in id + 1..tape[b + 3]: (j < len(tape) / 6 && (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0)))));
   assert !object ==> (tape[b + 3] <= len(tape) / 6 && tape[b + 5] == count(k in id + 1..tape[b + 3]: tape[6 * k + 4] == id));
   assert object ==> (tape[b + 3] <= len(tape) / 6 && 2 * tape[b + 5] == count(k in id + 1..tape[b + 3]: tape[6 * k + 4] == id));
-  assert forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(tape) / 6: old(tape)[6 * k + 4] == q);
   assert contained(tape, id + 1, len(tape) / 6, id);
   assert forall t in id..m: (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && tape[6 * j + 1] >= tape[6 * t + 1] && tape[6 * j + 2] <= tape[6 * t + 2] && tape[6 * j + 3] <= tape[6 * t + 3] && tape[6 * j + 4] >= t));
   assert forall t in id..m: (tape[6 * t] == 5 ==> (forall j in t + 1..tape[6 * t + 3]: (j < len(tape) / 6 && (tape[6 * j + 4] == t ==> tape[6 * j] != 7))));
@@ -413,7 +419,6 @@ fn child(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64, ke
   ensures is_ok(result) ==> (tape[len(old(tape)) + 3] == len(tape) / 6 && tape[len(old(tape)) + 4] == id && ((tape[len(old(tape))] == 7) == key))
   ensures is_ok(result) ==> (forall j in len(old(tape)) / 6 + 1..len(tape) / 6: tape[6 * j + 4] != id)
   ensures is_ok(result) ==> (linked(tape, id + 1, len(tape) / 6, id) && tree_ok(tape, id + 1, len(tape) / 6) && starts_from(tape, id + 1, len(tape) / 6, from))
-  ensures is_ok(result) ==> (forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q))
   ensures is_ok(result) ==> count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id) == count(k in id + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == id) + 1
   decreases 5 * (129 - depth) + 3
 {
@@ -448,7 +453,6 @@ fn member(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64, o
   ensures is_ok(result) ==> linked(tape, id + 1, len(tape) / 6, id)
   ensures is_ok(result) ==> tree_ok(tape, id + 1, len(tape) / 6)
   ensures is_ok(result) ==> starts_from(tape, id + 1, len(tape) / 6, from)
-  ensures is_ok(result) ==> (forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q))
   ensures is_ok(result) ==> ((object ==> 2 * children + 2 == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)) && (!object ==> children + 1 == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)))
   ensures is_ok(result) ==> (!object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> tape[6 * j] != 7)))
   ensures is_ok(result) ==> (object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0)))))
@@ -489,7 +493,6 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
   ensures is_ok(result) ==> linked(tape, id + 1, len(tape) / 6, id)
   ensures is_ok(result) ==> tree_ok(tape, id + 1, len(tape) / 6)
   ensures is_ok(result) ==> starts_from(tape, id + 1, len(tape) / 6, old(pos))
-  ensures is_ok(result) ==> (forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q))
   ensures is_ok(result) ==> ((object ==> 2 * ok_val(result) == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)) && (!object ==> ok_val(result) == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)))
   ensures is_ok(result) ==> (!object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> tape[6 * j] != 7)))
   ensures is_ok(result) ==> (object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0)))))
@@ -516,7 +519,6 @@ fn container(input: [u8], inout pos: i64, inout tape: [i64], id: i64, depth: i64
     invariant linked(tape, id + 1, len(tape) / 6, id)
     invariant tree_ok(tape, id + 1, len(tape) / 6)
     invariant starts_from(tape, id + 1, len(tape) / 6, old(pos))
-    invariant forall q in 0..id: count(k in q + 1..len(tape) / 6: tape[6 * k + 4] == q) == count(k in q + 1..len(old(tape)) / 6: old(tape)[6 * k + 4] == q)
     invariant (object ==> 2 * children == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id)) && (!object ==> children == count(k in id + 1..len(tape) / 6: tape[6 * k + 4] == id))
     invariant !object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> tape[6 * j] != 7))
     invariant object ==> (forall j in id + 1..len(tape) / 6: (tape[6 * j + 4] == id ==> ((tape[6 * j] == 7) == (count(k in id + 1..j: tape[6 * k + 4] == id) % 2 == 0))))
