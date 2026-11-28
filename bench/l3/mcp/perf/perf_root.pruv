@@ -17,7 +17,7 @@ mod packet;
 // The functions below stay private (struct-bearing parameters cannot be host entries); the driver is compiled in
 // the same Rust module as the generated code (include!), so it calls the emitted bodies directly. The `keep_*`
 // pub entries only make sure that the emitter keeps them. parse runs OUTSIDE the timed region.
-fn parse(b: [u8]) -> crate::json::JsonParse ! alloc
+fn parse(b: [u8]) -> crate::json::JsonParse from(b) ! alloc
 { return crate::lines::parse_range(b,0,len(b)); }
 
 fn core_old(p0: [i64], d: crate::json::JsonDocument, count0: i64, objects0: i64) -> [i64] ! alloc

@@ -6,7 +6,9 @@ pub fn parse_tape(input: [u8]) -> [i64] ! alloc
 {
   let parsed: crate::json::JsonParse = crate::parse::parse(input, false);
   match parsed {
-    crate::json::JsonParse::Parsed(document) => { let tape: [i64] = move document.tape; return tape; }
+    // 4.4zh-NB (gap): a borrowing binder's field cannot move out (`move document.tape` and a `take` param are
+    // `type/borrow_signature`), so the tape is copied once here where the hand returns `parser.tape` itself.
+    crate::json::JsonParse::Parsed(document) => { let tape: [i64] = copy(document.tape); return tape; }
     crate::json::JsonParse::Failed(error) => {
       let mut out: [i64] = alloc(3, 0);
       out[0] = -1; out[1] = error.position; out[2] = error.kind;

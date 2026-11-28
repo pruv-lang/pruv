@@ -351,14 +351,14 @@ pub fn scan(input: [u8]) -> Checked ! alloc
   return Checked::Rejected(n, 18);
 }
 
-fn failure(p: i64, k: i64) -> crate::json::JsonParse
+fn failure(p: i64, k: i64) -> crate::json::JsonParse from()
   ensures is_variant(result, crate::json::JsonParse::Failed)
   ensures variant_field(result, crate::json::JsonParse::Failed, error).position == p
 { return crate::json::JsonParse::Failed(crate::json::make_error(p, k)); }
 
 // Same scan as `scan`, but it builds the document itself so the tape is moved, not copied (G4).
 // `scan` stays for bench/l3/pkgs/lines, which still copies its tape (debt row in L3_RESTRUCTURE_SPEC).
-fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
+fn scan_document(input: [u8]) -> crate::json::JsonParse from(input) ! alloc
   requires len(input) <= 16777216
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= len(input))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> len(variant_field(result, crate::json::JsonParse::Parsed, document).source) == len(input)
@@ -405,9 +405,9 @@ fn scan_document(input: [u8]) -> crate::json::JsonParse ! alloc
     let container: i64 = stack[4 * depth];
     if depth == 0 && state == 2 {
       if p == n {
-        // R-6e-12: the finished tape moves into the document; only the borrowed source is copied.
+        // R-6e-12: the finished tape moves into the document; the document borrows the input (4.4zh-DB).
         let done: [i64] = truncate(tape, 6 * records);
-        return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: copy(input), tape: move done });
+        return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: input, tape: move done });
       }
       return failure(p, 11);
     }
@@ -512,7 +512,7 @@ fn publication_ok(parsed: crate::json::JsonParse, n: i64) -> bool
   }
 }
 
-pub fn parse(input: [u8]) -> crate::json::JsonParse ! alloc
+pub fn parse(input: [u8]) -> crate::json::JsonParse from(input) ! alloc
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= len(input))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) % 6 == 0 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) >= 6 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) <= 6291456)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (len(input) >= 1 && len(input) <= 16777216)

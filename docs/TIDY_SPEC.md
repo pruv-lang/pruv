@@ -392,6 +392,9 @@ by byte-identical output and run by group, with the full test suite once before 
       `{num}` delay alone gives known-difference, the same with two timer events swapped gives 121 fails.
     - HC-7 `bench/l3/claude/entry.pruv:10` `parse_line` contract holds for an always-`Skip` body; add the
       success condition for a plain user line and a mutant in `q_mutants.py` that must be rejected by it.
+      Not done (P11-db): `pkgs/parse::parse` / `scan` have no acceptance `ensures` (every one is `Parsed ==> ..` or a
+      failure position), so no input is proved to parse and an always-`Skip` body still meets any success condition
+      on `parse_line`. Needs an acceptance fact in `pkgs/parse` (at least for an object line) first.
     - HC-8 `.github/workflows/windows-abi.yml:7` path filter omits the compiler, so committed `.win.ll` can go
       stale; run `tests/abi/winci/prepare.py --check` when ABI codegen changes. Done: the filter adds
       `pruvc-rs/crates/pruv-core/src/**` and `pruvc-rs/crates/pruvc/src/**`; `ci.yml` runs `prepare.py --check

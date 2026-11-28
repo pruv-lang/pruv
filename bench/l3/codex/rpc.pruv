@@ -73,18 +73,20 @@ pub fn start(binary: str, argv: str, cwd: str, timeout_ms: i64, inout ctl: Ctl) 
 
 // trim the line line[0..n), parse it as JSON (P1: invalid UTF-8 is a parse failure and the line is skipped).
 // DB59 (G-DB58-1): the line buffer stays with the caller and is reused for the next line (its size stays at the
-// longest line so far, as hand's cleared `self.line`); the document copies out only the trimmed line, once.
-pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse ! alloc
+// longest line so far, as hand's cleared `self.line`); 4.4zh-DB: the document borrows the trimmed range of `line`,
+// so the caller clears `line` after the match.
+pub fn parse_line(line: [u8], n: i64) -> crate::json::JsonParse from(line) ! alloc
   requires 0 <= n && n <= len(line)
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_local(variant_field(result, crate::json::JsonParse::Parsed, document))
 {
   let t: crate::util::Bounds = crate::util::trim_span(line, n);
-  return crate::lines::parse_copy(line, t.lo, t.hi);
+  return crate::lines::parse_range(line, t.lo, t.hi);
 }
 
 // One receive step of a caller's pump loop (the caller parses each line once and keeps the document; a document cannot
 // travel back with the loop). ctl.got when a complete line of ctl.n bytes is in `line` (ctl.n == len(line)); the caller
-// parses it and then clears `line` with truncate(line, 0). False when nothing usable arrived.
+// parses it and clears `line` with truncate(line, 0) after its last use of the document. False when nothing usable
+// arrived.
 // An oversized line, a closed child, a timeout or a transport failure sets ctl.fail.
 pub fn step(take l: Loop, slot: i64, overall: i64, inout ctl: Ctl, inout st: crate::transport::Reader, inout line: [u8], inout chunk: [u8]) -> Loop ! async, proc, alloc
   requires 0 <= st.at && st.at <= st.end && 0 <= st.end && st.end <= 65536 && len(chunk) == 65536
@@ -183,7 +185,6 @@ pub fn open(take l: Loop, inout ctl: Ctl, inout st: crate::transport::Reader, in
     q = step(move q, slot, overall, inout ctl, inout st, inout line, inout chunk);
     if ctl.fail == 0 && ctl.got {
       let parsed: crate::json::JsonParse = parse_line(line, ctl.n);
-      line = truncate(line, 0);
       match parsed {
         crate::json::JsonParse::Failed(e) => { }
         crate::json::JsonParse::Parsed(d) => {
@@ -203,6 +204,7 @@ pub fn open(take l: Loop, inout ctl: Ctl, inout st: crate::transport::Reader, in
           }
         }
       }
+      line = truncate(line, 0); // after the document's last use (it borrows `line`)
     }
   }
   if ctl.fail == 0 && !done { ctl.fail = 6; }

@@ -624,13 +624,13 @@ pub fn scan(input: [u8]) -> Checked ! alloc
   }
 }
 
-fn failure(p: i64, k: i64) -> crate::json::JsonParse
+fn failure(p: i64, k: i64) -> crate::json::JsonParse from()
   ensures is_variant(result, crate::json::JsonParse::Failed)
   ensures variant_field(result, crate::json::JsonParse::Failed, error).position == p
 { return crate::json::JsonParse::Failed(crate::json::make_error(p, k)); }
 
-// Publish the completed tape with an owned source.
-fn scan_document(input: [u8], object: bool) -> crate::json::JsonParse ! alloc
+// Publish the completed tape; the document borrows the input (hand `Document { source: input, tape }`).
+fn scan_document(input: [u8], object: bool) -> crate::json::JsonParse from(input) ! alloc
   requires len(input) <= 16777216 && utf8_valid_span(input, 0, len(input))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_strings(variant_field(result, crate::json::JsonParse::Parsed, document))
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= len(input))
@@ -653,7 +653,7 @@ fn scan_document(input: [u8], object: bool) -> crate::json::JsonParse ! alloc
   match root {
     Err(fault) => { return failure(fault.position, fault.kind); }
     Ok(()) => {
-      return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: copy(input), tape: move tape });
+      return crate::json::JsonParse::Parsed(crate::json::JsonDocument { source: input, tape: move tape });
     }
   }
 }
@@ -690,7 +690,7 @@ fn publication_ok(parsed: crate::json::JsonParse, n: i64) -> bool
 }
 
 // `object`: only an object root is accepted (the claude line parser); a JSON document of any root otherwise.
-pub fn parse(input: [u8], object: bool) -> crate::json::JsonParse ! alloc
+pub fn parse(input: [u8], object: bool) -> crate::json::JsonParse from(input) ! alloc
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_strings(variant_field(result, crate::json::JsonParse::Parsed, document))
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= len(input))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) % 6 == 0 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) >= 6 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) <= 6291456)
@@ -723,7 +723,7 @@ pub fn parse(input: [u8], object: bool) -> crate::json::JsonParse ! alloc
 
 // L-gaps 29 (4.4l-CT): `parse` plus the run-time json::check_subtrees pass, for a caller that needs the child-count
 // and key-parity facts (json b_root `array_length`); the scanner proves the containment facts only.
-pub fn parse_counted(input: [u8], object: bool) -> crate::json::JsonParse ! alloc
+pub fn parse_counted(input: [u8], object: bool) -> crate::json::JsonParse from(input) ! alloc
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> crate::json::doc_strings(variant_field(result, crate::json::JsonParse::Parsed, document))
   ensures is_variant(result, crate::json::JsonParse::Failed) ==> (0 <= variant_field(result, crate::json::JsonParse::Failed, error).position && variant_field(result, crate::json::JsonParse::Failed, error).position <= len(input))
   ensures is_variant(result, crate::json::JsonParse::Parsed) ==> (len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) % 6 == 0 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) >= 6 && len(variant_field(result, crate::json::JsonParse::Parsed, document).tape) <= 6291456)

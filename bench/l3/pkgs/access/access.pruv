@@ -146,18 +146,20 @@ pub fn key_is(doc: crate::json::JsonDocument, j: i64, key: str) -> bool
 // Slot `i` holds what `field(doc, id, keys[i])` returns for an ASCII key: the value id of the last member with that
 // key, or -1; every slot holds the same negative code when `id` is not an object (-3 bad id, -2 another kind) or
 // the walk finds a corrupt tape (-4). No allocation: the slots are one value.
-pub fn fields<const N: i64>(doc: crate::json::JsonDocument, id: i64, keys: [str; N]) -> [i64; N]
+// 4.4zh-CG (gap): a generic fn cannot take a borrowing struct (R-6g-11), so the hand's `<const N>` is fixed at the
+// one caller's 13 keys (claude entry::root_keys); the body is the generic one with N = 13.
+pub fn fields(doc: crate::json::JsonDocument, id: i64, keys: [str; 13]) -> [i64; 13]
 {
   let stop: i64 = members_end(doc, id);
-  if stop < 0 { return [stop; N]; }
-  let mut r: [i64; N] = [-1; N];
+  if stop < 0 { return [stop; 13]; }
+  let mut r: [i64; 13] = [-1; 13];
   let mut j: i64 = id + 1;
   while j < stop
     invariant 0 <= id && id < j && j <= stop && stop <= len(doc.tape) / 6
     decreases stop - j
   {
     let n: i64 = member_next(doc, id, j, stop);
-    if n < 0 { return [-4; N]; }
+    if n < 0 { return [-4; 13]; }
     let mut i: i64 = 0;
     while i < len(keys)
       invariant 0 <= i && i <= len(keys)
@@ -401,7 +403,7 @@ pub fn string_text_scanned_owned(doc: crate::json::JsonDocument, id: i64) -> cra
 // borrowed `str` view of its content, no copy and no run-time UTF-8 scan (the fact is `doc_strings`, 4.4l).
 // None for an escaped node, another kind or a corrupt tape; the caller then takes the owned decode
 // (`string_text_owned`, the hand's `Cow::Owned` made while parsing).
-pub fn plain_str(doc: crate::json::JsonDocument, id: i64) -> Option<ref str> from(doc.source)
+pub fn plain_str(doc: crate::json::JsonDocument, id: i64) -> Option<ref str> from(doc)
   requires crate::json::doc_strings(doc)
   ensures is_some(result) ==> (0 <= id && id < len(doc.tape) / 6 && len(some_val(result)) <= doc.tape[6 * id + 2] - doc.tape[6 * id + 1])
 {

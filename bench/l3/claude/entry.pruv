@@ -8,14 +8,14 @@ pub enum Field { Value(text: str), Missing, Defect(kind: i64) }
 enum Block { Piece(text: str), Ignore, Veto, Broken(kind: i64) }
 
 // Object roots only; malformed, empty and non-object lines are Skip; only InternalInvariant is a defect.
-pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
+pub fn parse_line(data: [u8], start: i64, end: i64) -> Line from(data) ! alloc
   requires 0 <= start && start <= end && end <= len(data)
   ensures is_variant(result, Line::Object) ==> crate::json::doc_local(variant_field(result, Line::Object, doc))
   ensures is_variant(result, Line::Object) ==> crate::json::doc_strings(variant_field(result, Line::Object, doc))
 {
   // DB39: parse::parse over a borrowed view (R-6g-5). The scan reads data[start..end) in place and
   // validates UTF-8 inside string tokens (D33); the record-local tape facts are scan_document ensures
-  // (DB33), so only check_subtrees runs after the scan. Only an accepted line copies its bytes, once.
+  // (DB33), so only check_subtrees runs after the scan. 4.4zh-DB: an accepted line's document borrows data[start..end).
   // Every non-InternalInvariant failure maps to Skip (invalid UTF-8 included), as before.
   let n: i64 = end - start;
   if n > crate::json::limit_input_bytes() { return Line::Skip; }

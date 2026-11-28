@@ -6,7 +6,7 @@ pub enum Title { Found(text: str), NoTitle, Defect(kind: i64) }
 // 4.3e-J: Piece carries the text string node; array_content appends its borrowed view (hand `&str` parts).
 enum Block { Piece(node: i64), Ignore, Broken(kind: i64) }
 
-pub fn parse_line(data: [u8], start: i64, end: i64) -> Line ! alloc
+pub fn parse_line(data: [u8], start: i64, end: i64) -> Line from(data) ! alloc
   requires 0 <= start && start <= end && end <= len(data)
   ensures is_variant(result, Line::Object) ==> crate::json::doc_local(variant_field(result, Line::Object, doc))
   ensures is_variant(result, Line::Object) ==> crate::json::doc_strings(variant_field(result, Line::Object, doc))
