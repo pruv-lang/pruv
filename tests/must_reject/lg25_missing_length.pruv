@@ -1,0 +1,2 @@
+fn make<const N: i64>() -> [i64; N] { return [0; N]; }
+fn bad() -> i64 { let a: [i64; 1] = make(); return len(a); }

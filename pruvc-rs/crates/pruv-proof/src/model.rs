@@ -896,9 +896,16 @@ impl Model {
             Ty::Array(elem) => *elem,
             Ty::Str => Elem::U8,
             Ty::User(n) if n == "string" => Elem::U8,
-            // P7-1 B: a `[T; N]` field is a Buf of Int (integer elements) or Bool; its element range comes from the type
+            // Fixed arrays of str use Buf cells. Element parameters retain their abstract sorts.
             Ty::Inst(g) if g.is_fixed() => {
-                if g.fixed_parts().is_some_and(|(e, _)| *e == GType::bool()) { Elem::Bool } else { Elem::I64 }
+                let (elem, _) = g.fixed_shape().unwrap();
+                if *elem == GType::bool() {
+                    Elem::Bool
+                } else if *elem == GType::str() || elem.owner.is_some() {
+                    Elem::Abs
+                } else {
+                    Elem::I64
+                }
             }
             Ty::Inst(g) if g.name == "vec" && g.args.first() == Some(&GType::bool()) => Elem::Bool,
             Ty::Inst(g) if g.is_vector() && g.args.first() != Some(&GType::i64()) => Elem::Abs,

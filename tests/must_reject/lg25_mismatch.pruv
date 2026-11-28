@@ -1,0 +1,2 @@
+fn key_count<const N: i64>(a: [str; N], b: [str; N]) -> i64 { return len(a); }
+fn bad() -> i64 { return key_count(["a"], ["a", "b"]); }

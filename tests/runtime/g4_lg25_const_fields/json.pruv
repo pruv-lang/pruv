@@ -1,0 +1,2 @@
+// A small document fixture with two members, at indexes 1 and 3.
+pub struct JsonDocument { valid: bool, bad_member: bool }

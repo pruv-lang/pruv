@@ -2892,3 +2892,20 @@ carry the open parent's count as a plain variable), and then cut the helper over
 - Review B (Claude opus high, codegen side): no required finding; its missing run-time test is
   `tests/runtime/lg24_opq_pred_entry` (`--trust-callers` left out: it drops entry checks by design).
 - Measured: local `work/lgaps24/` (not committed; json_roots_times.txt, perf_cells.json, NOTES.md).
+
+## L-gaps 25: G-DB33-1/2 attempt (4.4l-CT), ground per-parent child count
+
+| Row | Kind | Change | Tests |
+|---|---|---|---|
+| 4.4s-FK | closed | R-6t-5 `const N: i64` and static `[str; N]`; `access::fields` with `root_keys` on it (details and performance in `../pkgs/RESHAPE.md` "Rows after L-gaps 25") | L3 piece tests both backends; must_reject, l3_frontend, g8_frontend, runtime, spec_trace |
+| 4.4l-CT (G-DB33-1/2) | proof gap, open (time) | Side branch `lair/pruv-l-gaps-25-ct-wip` (4cbbfc3e, on the L-gaps 24 WIP 086c98d9): every quantified `forall q` child-count clause is gone (`child`, `member`, `container` ensures and invariant, `set_header`); `record` and `open_container` carry one ground ensures, `count(k in parent + 1..len(tape) / 6: tape[6 * k + 4] == parent) == count(.. old(tape) ..) + 1` under `len(old(tape)) > 0 \|\| parent == -1`, and `open_container` restates it after `set_header` with a five-step split / frame assert chain. The chain needs "count over a range where the body is false everywhere is 0", which the verifier cannot get without induction, so the branch also carries a verifier lemma (R-6-4 extension, not merged): a positive count has a Skolem witness, `count(lo, hi) > 0 ==> lo <= w(lo, hi) < hi && c(w)`, triggered on the count application and added to the split stage. Result (not under the perf lock, load 3.4-6): a2_root now passes (17.54 s; it failed on L-gaps 24) and a5_root passes at 16.77 s against 11.3 s (L-gaps 24) and 7.3 s (main); target about 8.8 s not met. Solver profile of a5 (13.9 s total): `open_container` 7.2 s, of it two stage-1 queries Unknown at about 3.3 s each (the witness lemma lives only in stage 2, so stage 1 times out before stage 2 proves them); `container` 1.1 s, `record` 1.0 s, `parse` 0.9 s, `member` 0.6 s. Tried and reverted: moving the split / zero facts into `child` (sum of the range up to `len(old) / 6 + 1`): `child` becomes Unknown at all three stages (10.2 s), a5 fails | a2/a5 only; the verifier lemma is unaudited |
+
+Also tried: the witness lemma in the stage-1 lemma set instead of the split stage: a5 fails (two `set_header` asserts
+at lines 397-398 unproved, `child` postcondition line 421 `verify_unknown`), so the extra lemma hurts every
+aggregate goal that does not need it.
+
+Next direction for 4.4l-CT: the ground count works (a2 is stable now) but the stage order spends the timeout of
+stage 1 on goals only stage 2 can prove. Keep the witness lemma in the split stage and let a goal that reads a
+range-split count (the `open_container` assert chain) start at stage 2, or give stage 1 a shorter timeout for such goals; then measure whether
+`open_container` falls to well under a second. If it does, the lemma needs SPEC R-6-4 text, spec tests (accept `count
+== 0` from a false-everywhere `forall`, reject a false `count == 0`) and the A/B review before it can merge.

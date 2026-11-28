@@ -1397,8 +1397,100 @@ fn is_int_literal(e: &Expr) -> bool {
     }
 }
 
+fn fixed_str_position(line: i64, col: i64) -> PruvError {
+    terr(line, col, "fixed_array_position", "a fixed str array is a by-value parameter or immutable local", "")
+}
+
+/// Gather length restrictions from checked types and propagate them through symbolic forwarding.
+fn check_const_lengths(prog: &mut Program) -> Res<()> {
+    use crate::foreign_shim::{walk_expr, walk_stmts, Node};
+    let mut limits = HashMap::new();
+    let mut calls = Vec::new();
+    fn record(ty: &GType, limits: &mut HashMap<(String, usize), u64>) {
+        if let Some((elem, len)) = ty.fixed_shape() {
+            if let Some(id) = crate::gtype::param_id(&len) {
+                let cap = crate::gtype::FIXED_MAX_BYTES / GType::fixed_elem_bytes(elem);
+                limits.entry(id).and_modify(|limit| *limit = (*limit).min(cap)).or_insert(cap);
+            }
+        } else {
+            for arg in &ty.args { record(arg, limits); }
+        }
+    }
+    if !prog.functions.iter().any(|f| f.tparams.iter().any(|p| p.const_limit.is_some())) {
+        return Ok(());
+    }
+    for f in &prog.functions {
+        for key in f.params.iter().map(|p| &p.ty).chain(std::iter::once(&f.ret)) {
+            record(&GType::from_key(key), &mut limits);
+        }
+        let mut visit = |node: Node<'_>| {
+            let key = match node {
+                Node::Let(l) => Some(&l.ty),
+                Node::Expr(e) => {
+                    if let Expr::Call(call) = e {
+                        if let Some(inst) = &call.inst {
+                            for (owner, index, arg) in &inst.subst {
+                                if arg.is_const_arg() {
+                                    calls.push((call.line, call.col, (owner.clone(), *index), arg.clone()));
+                                }
+                            }
+                        }
+                    }
+                    expr_ty(e).as_ref()
+                }
+                _ => None,
+            };
+            if let Some(key) = key {
+                record(&GType::from_key(key), &mut limits);
+            }
+        };
+        for e in f.requires.iter().chain(&f.ensures).chain(&f.cost).chain(&f.decreases) {
+            walk_expr(e, &mut visit);
+        }
+        walk_stmts(&f.body, &mut visit);
+    }
+    loop {
+        let mut changed = false;
+        for (_, _, callee, actual) in &calls {
+            if let (Some(&cap), Some(caller)) = (limits.get(callee), crate::gtype::param_id(actual)) {
+                let limit = limits.entry(caller).or_insert(i64::MAX as u64);
+                if cap < *limit {
+                    *limit = cap;
+                    changed = true;
+                }
+            }
+        }
+        if !changed { break; }
+    }
+    for (line, col, callee, actual) in calls {
+        if let (Some(&cap), Some(n)) = (limits.get(&callee), actual.const_value()) {
+            if n > cap {
+                return Err(terr(line, col, "fixed_array_length", format!("const length {} exceeds the array size limit of {}", n, cap), ""));
+            }
+        }
+    }
+    for f in &mut prog.functions {
+        let owner = fn_owner(&f.name);
+        for (index, p) in f.tparams.iter_mut().enumerate() {
+            if let Some(cap) = p.const_limit.as_mut() {
+                if let Some(limit) = limits.get(&(owner.clone(), index)) {
+                    *cap = *limit;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn array_lit_length(call: &Call) -> GType {
+    if call.name == crate::ast::SYMBOLIC_REPEAT {
+        return call.targs.as_ref().unwrap()[0].clone();
+    }
+    GType::const_arg(crate::ast::array_repeat_len(&call.name).unwrap_or(call.args.len() as u64))
+}
+
 fn elem_type(at: &GType) -> GType {
-    if let Some((e, _)) = at.fixed_parts() {
+    if let Some((e, _)) = at.fixed_shape() {
         return e.clone(); // P7-1: [T; N] reads exactly T
     }
     if at.name == "array" && !at.args.is_empty() {
@@ -1602,6 +1694,7 @@ impl Checker {
         self.check_fn_sccs(&prog.functions)?; // G9 A0: measures and stable type parameters of recursive call SCCs
         self.check_par_eligibility(&prog.functions)?; // G7 A0: effects, foreign calls, then nested groups
         self.check_costs(prog)?;
+        check_const_lengths(prog)?;
         self.check_eq_targs()?; // P7-1 R1: after cost clauses, which may compare type parameters too
         self.record_g9(prog);
         self.x_auto(prog)?; // P07: code calls of an expandable function know its body (result == expansion)
@@ -2316,8 +2409,17 @@ impl Checker {
 
     /// Every type reference: arity, known names, type-argument and bound rules (G3_SPEC 3.1, 3.2, 3.4).
     fn check_type(&self, line: i64, col: i64, ty: &GType) -> Res<()> {
-        if ty.is_fixed() {
-            return Ok(()); // P7-1: the parser admitted the element and the size
+        if let Some((elem, len)) = ty.fixed_shape() {
+            if elem.owner.is_some() && !is_element(elem, &self.elem_params) {
+                return Err(terr(line, col, "generic_bound", "a fixed-array type parameter requires Element", ""));
+            }
+            if let Some(n) = len.const_value() {
+                crate::parser::fixed_size(line, col, elem, n)?;
+            }
+            return Ok(());
+        }
+        if ty.contains_fixed_str() {
+            return Err(fixed_str_position(line, col));
         }
         if ty.view_base().is_none() && ty.args.iter().any(contains_unsupported_small_int_arg) {
             return Err(small_int_unsupported(line, col, "non-i64 integer and [u16] type arguments require P11", "use i64"));
@@ -2559,7 +2661,9 @@ impl Checker {
             return Err(terr(line, col, "borrow_signature", "borrowed types cannot be generic arguments", ""));
         }
         if a.is_fixed() && tp.is_none() {
-            return Ok(()); // L-gaps 20: `Option<[T; N]>`, the parser admitted only this position
+            // L-gaps 20: `Option<[T; N]>`, the parser admitted only this position; the element bound and size
+            // rules are the same as for a direct `[T; N]` (L-gaps 25)
+            return self.check_type(line, col, a);
         }
         self.check_type_rec(line, col, a)?;
         if a.contains_collection() || self.depends_on_nested_record(a) {
@@ -2663,6 +2767,15 @@ impl Checker {
             self.check_type(line, col, &GType::new(ty, targs.clone()))?;
         }
         for (a, tp) in targs.iter().zip(tparams.iter()) {
+            if tp.const_limit.is_some() {
+                if !a.is_const_arg() {
+                    return Err(terr(line, col, "const_type", "expected a const length argument", ""));
+                }
+                continue;
+            }
+            if a.is_const_arg() {
+                return Err(terr(line, col, "type_argument", "expected a type argument, found a const length", ""));
+            }
             self.check_type(line, col, a)?;
             if catalog_collection.is_none() {
                 self.check_arg(line, col, a, Some(tp))?;
@@ -2688,6 +2801,9 @@ impl Checker {
             for fields in groups {
                 for f in fields {
                     let ft = GType::from_key(&f.ty);
+                    if ft.contains_fixed_str() {
+                        return Err(fixed_str_position(f.line, f.col));
+                    }
                     if matches!(d, TypeDecl::Enum(_)) && is_narrow(&ft) {
                         return Err(small_int_unsupported(f.line, f.col, "non-i64 integer enum payloads require P11", "use i64"));
                     }
@@ -3176,7 +3292,14 @@ impl Checker {
     /// Inout parameters are scalars, arrays, non-generic structs or supported collections.
     fn check_modes(&self, prog: &Program) -> Res<()> {
         for f in &prog.functions {
+            if GType::from_key(&f.ret).contains_fixed_str() {
+                return Err(fixed_str_position(f.line, f.col));
+            }
             for p in &f.params {
+                let ty = GType::from_key(&p.ty);
+                if ty.contains_fixed_str() && (!ty.is_fixed_str() || p.take || p.mode_pos.is_some() || f.foreign.is_some()) {
+                    return Err(fixed_str_position(f.line, f.col));
+                }
                 if let Some((ml, mc)) = p.mode_pos {
                     let pt = GType::from_key(&p.ty);
                     let aggregate_collection = pt.owner.is_none() && pt.name == "hashmap"
@@ -3420,7 +3543,7 @@ impl Checker {
                 let caller = &functions[ci];
                 let callee = &functions[ce];
                 let mut ok = caller.tparams.len() == callee.tparams.len()
-                    && caller.tparams.iter().zip(callee.tparams.iter()).all(|(a, b)| a.bound == b.bound);
+                    && caller.tparams.iter().zip(callee.tparams.iter()).all(|(a, b)| a.bound == b.bound && a.const_limit.is_some() == b.const_limit.is_some());
                 if ok {
                     let empty: Vec<GType> = Vec::new();
                     let ta: &Vec<GType> = targs.as_ref().unwrap_or(&empty);
@@ -4490,6 +4613,9 @@ impl Checker {
                     ));
                 }
                 let sty = GType::from_key(&s.ty);
+                if sty.contains_fixed_str() && (!sty.is_fixed_str() || s.mutable || s.borrowed || s.is_place()) {
+                    return Err(fixed_str_position(s.line, s.col));
+                }
                 if s.is_place() {
                     let Expr::InoutArg(arg) = &mut s.value else { unreachable!() };
                     // R-6g9-6: a place alias would bypass the target's provenance check.
@@ -5559,7 +5685,11 @@ impl Checker {
     }
 
     fn match_scrutinee(&mut self, e: &mut Expr, scope: &Scope) -> Res<GType> {
-        self.read_expr(e, scope, false, &["map_get", "map_get_mut", "map_take", "vec_pop_front", "vec_at_mut", "vec_get"])
+        let ty = self.read_expr(e, scope, false, &["map_get", "map_get_mut", "map_take", "vec_pop_front", "vec_at_mut", "vec_get"])?;
+        if ty.is_fixed_str() {
+            return Err(fixed_str_position(e.line(), e.col()));
+        }
+        Ok(ty)
     }
 
     /// P8: `match t { (a, b) => { B } }` is the destructuring `if true { let tmp: T = t; let a = tmp.0; ..; B }`
@@ -6181,9 +6311,11 @@ impl Checker {
         let (line, col) = (place.line(), place.col());
         let ct = self.expr(&mut place.clone(), scope, false)?;
         let base = ct.view_base().cloned().unwrap_or_else(|| ct.clone());
-        let elem = if base.is_array() {
+        let elem = if base.is_fixed_str() {
+            return Err(fixed_str_position(line, col));
+        } else if base.is_array() {
             elem_type(&base)
-        } else if let Some((el, _)) = base.fixed_parts() {
+        } else if let Some((el, _)) = base.fixed_shape() {
             // P7-1 B: a fixed array iterates its N elements like a slice
             el.clone()
         } else if base.owner.is_none() && base.name == "vec" && base.args.len() == 1
@@ -6522,7 +6654,7 @@ impl Checker {
                 return self.check_expected_type(e, ty, op, t);
             }
         }
-        if let (Expr::Call(call), Some((el, _))) = (&mut *e, ty.fixed_parts()) {
+        if let (Expr::Call(call), Some((el, _))) = (&mut *e, ty.fixed_shape()) {
             if is_array_lit(&call.name) {
                 // P7-1: the expected [T; N] types the literal's elements
                 let t = self.array_lit(call, Some(el), scope, contract)?;
@@ -6550,27 +6682,39 @@ impl Checker {
     /// P7-1: `[a, b, c]` / `[x; N]`. With `want` every element is checked against it; without it the first
     /// element that is not a bare integer literal fixes T (all bare literals: i64).
     fn array_lit(&mut self, call: &mut Call, want: Option<&GType>, scope: &Scope, c: bool) -> Res<GType> {
-        let n = match crate::ast::array_repeat_len(&call.name) {
-            Some(n) => n,
-            None => call.args.len() as u64,
-        };
+        let n = array_lit_length(call);
         let el = match want {
             Some(w) => w.clone(),
             None => match call.args.iter_mut().find(|a| !bare_lit(a)) {
+                Some(Expr::StrLit(lit)) if !lit.empty => strt(),
                 Some(a) => self.expr(a, scope, c)?,
                 None => i64t(),
             },
         };
-        if el != boolt() && el.int_width().is_none() {
+        if el == strt() {
+            for a in &mut call.args {
+                let Expr::StrLit(lit) = a else {
+                    return Err(terr(a.line(), a.col(), "fixed_array_element", "a str array element must be a static string literal", ""));
+                };
+                if lit.empty {
+                    return Err(empty_view_err(lit.line, lit.col));
+                }
+                lit.ty = Some("str".into());
+            }
+        } else if el != boolt() && el.int_width().is_none() && !(n.owner.is_some() && is_element(&el, &self.elem_params)) {
             return Err(terr(call.line, call.col, "fixed_array_element",
                 format!("a fixed-length array holds scalar integers, char or bool, found {}", tn(&el)),
                 "use a buffer ([T]) or a Vec for other elements"));
         }
-        for a in call.args.iter_mut() {
-            self.expect(a, &el, scope, c, None)?;
+        if el != strt() {
+            for a in &mut call.args {
+                self.expect(a, &el, scope, c, None)?;
+            }
         }
-        crate::parser::fixed_size(call.line, call.col, &el, n)?;
-        Ok(GType::fixed(el, n))
+        if let Some(k) = n.const_value() {
+            crate::parser::fixed_size(call.line, call.col, &el, k)?;
+        }
+        Ok(GType::fixed_with_len(el, n))
     }
 
     /// P3: an index is i64 or any unsigned scalar integer (`u8`..`usize`); a literal index stays i64.
@@ -6949,7 +7093,7 @@ impl Checker {
             }
             Expr::Index(x) => {
                 let at = self.expr(&mut x.array, scope, c)?;
-                if let Some((el, _)) = at.fixed_parts() {
+                if let Some((el, _)) = at.fixed_shape() {
                     // P7-1: a[i] on [T; N] is a T; the proof asks 0 <= i < N
                     let el = el.clone();
                     self.expect_index(&mut x.index, scope, c)?;
@@ -7749,6 +7893,12 @@ impl Checker {
             ));
         }
         let x = targs[0].clone();
+        if targs.iter().any(GType::contains_fixed_str) {
+            return Err(fixed_str_position(e.line, e.col));
+        }
+        if targs.iter().any(GType::is_const_arg) {
+            return Err(terr(e.line, e.col, "type_argument", "expected a type argument, found a const length", ""));
+        }
         let view = x.view_base();
         if view.is_some() && targs.get(1).is_some_and(|err| *err != i64t()) {
             return Err(terr(e.line, e.col, "borrow_signature", "view payloads require an i64 error type", ""));
@@ -8855,6 +9005,55 @@ impl Checker {
         Ok(elem)
     }
 
+    fn const_call_args(&mut self, call: &Call, f: &FuncInfo, scope: &Scope, contract: bool) -> Res<Vec<GType>> {
+        let written = call.targs.as_deref().unwrap_or(&[]);
+        let error = |code, message| terr(call.line, call.col, code, message, "");
+        // L-gaps 25: with every argument written, the explicit const arguments still seed the slots, so a
+        // fixed-array argument of another length is a fixed_array_length conflict (R-6t-5)
+        let full = written.len() == f.tparams.len();
+        if !full {
+            let type_count = f.tparams.iter().filter(|p| p.const_limit.is_none()).count();
+            if written.len() != type_count || written.iter().any(GType::is_const_arg) {
+                return Err(error("type_arity", "write all type arguments explicitly and either supply or infer the const arguments"));
+            }
+        }
+        let owner = fn_owner(&call.name);
+        let mut inferred: Vec<Option<GType>> = if full {
+            // only a literal length seeds a slot; any other written argument is left to the const_type check
+            written.iter().zip(&f.tparams).map(|(w, p)| (p.const_limit.is_some() && w.is_const_arg()).then(|| w.clone())).collect()
+        } else {
+            vec![None; f.tparams.len()]
+        };
+        for (arg, param) in call.args.iter().zip(&f.params) {
+            let Some((_, len)) = param.fixed_shape() else { continue };
+            if len.owner.as_deref() != Some(&owner) { continue; }
+            let arg = match arg { Expr::InoutArg(arg) => arg.expr.as_ref(), other => other };
+            let actual = match arg {
+                Expr::Call(lit) if is_array_lit(&lit.name) => Some(array_lit_length(lit)),
+                Expr::Var(v) => scope.get(&v.name).and_then(|t| t.ty.fixed_shape().map(|(_, n)| n)),
+                _ => self.expr(&mut arg.clone(), scope, contract)?.fixed_shape().map(|(_, n)| n),
+            };
+            if let Some(actual) = actual {
+                let slot = &mut inferred[len.index];
+                if slot.as_ref().is_some_and(|previous| *previous != actual) {
+                    return Err(error("fixed_array_length", "fixed-array arguments infer conflicting lengths"));
+                }
+                *slot = Some(actual);
+            }
+        }
+        if full {
+            return Ok(written.to_vec());
+        }
+        let mut types = written.iter().cloned();
+        f.tparams.iter().zip(inferred).map(|(p, n)| {
+            if p.const_limit.is_some() {
+                n.ok_or_else(|| error("type_arity", "a const length missing from the fixed-array arguments must be explicit"))
+            } else {
+                Ok(types.next().unwrap())
+            }
+        }).collect()
+    }
+
     fn call(&mut self, e: &mut Call, scope: &Scope, c: bool, want_deque: bool) -> Res<GType> {
         if is_array_lit(&e.name) {
             return self.array_lit(e, None, scope, c);
@@ -9333,6 +9532,13 @@ impl Checker {
                 }
             }
         }
+        let const_generic = f.tparams.iter().any(|p| p.const_limit.is_some());
+        let targs = if const_generic {
+            arity(f.params.len())?;
+            Some(self.const_call_args(e, &f, scope, c)?)
+        } else {
+            targs
+        };
         let m = self.instantiate(line, col, &format!("function {}", n), &fn_owner(&n), &f.tparams, &targs)?;
         if let Some(m) = &m {
             e.inst = Some(inst_of(fn_owner(&n), targs.as_deref().unwrap_or(&[]), m));
@@ -9387,7 +9593,11 @@ impl Checker {
                     } else if cat.is_some() && is_text_view_op(&n) && want == strt() && matches!(arg, Expr::Call(x) if x.name == "subview") {
                         self.expect_user_arg(arg, &want, scope, c, true)?; // LB7 (R-6g6-3): a borrowed str range, no copy
                     } else if cat.is_none() {
-                        self.expect_call_arg(arg, &want, scope, c, !f.foreign && !self.takes[&n][i], !f.holds_args)?;
+                        if const_generic && want.is_fixed() && matches!(arg, Expr::Call(x) if is_array_lit(&x.name)) {
+                            self.expect(arg, &want, scope, c, None)?;
+                        } else {
+                            self.expect_call_arg(arg, &want, scope, c, !f.foreign && !self.takes[&n][i], !f.holds_args)?;
+                        }
                     } else if i == 0 && want_deque && n == "vec_push" {
                         self.expect(arg, &GType::new("vecdeque", want.args), scope, c, None)?;
                     } else if i == 0 && matches!(n.as_str(), "vec_push" | "vec_get") {

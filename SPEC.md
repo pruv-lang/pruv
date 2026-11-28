@@ -3252,6 +3252,42 @@ enum or collection target prints the equivalent full `match`. Slice patterns low
 over the target (R-6u-4) and `while let` lowers to a loop whose head is a full `match` that breaks on the other
 variants (R-6u-5).
 
+- R-6t-5 **Function length parameters and fixed arrays of string literals.** A function may declare
+  `const N: i64` in its generic parameter list, alongside ordinary type parameters. Structs and enums
+  cannot declare const parameters. In an array type `[T; N]` or repeat literal `[x; N]`, a length
+  parameter must stand alone. Expressions such as `N + 1` are rejected. The array length returned
+  by `len` is `N`. An abstract element type must have the `Element` bound. Its length is bounded
+  using the widest admissible element so that one bound applies throughout the declaration.
+  A call may give lengths explicitly with a nonnegative `i64` literal, as in `f::<13>(...)`, or
+  pass through one of the caller's length parameters. When lengths are omitted, each is inferred
+  from the corresponding fixed-array arguments, including list and repeat literals and already
+  typed values. Those arguments must agree with each other and with any explicit length. A length
+  with no array argument to infer it from must be explicit. Ordinary type arguments must still
+  be explicit (`type/type_arity`).
+  A fixed array of `str` is a by-value internal parameter or immutable local. Its list or repeat
+  literal contains only static string literals, including the empty string `""`. It incurs no
+  `alloc` effect. Such an array cannot appear in `Option`, a struct or enum field, a result,
+  a `take` or `inout` parameter, a mutation, a whole-array equality or inequality, or an array
+  pattern. A `for` loop over it is not supported (`type/fixed_array_position`); iterate the
+  indexes with `for i in 0..len(a)` instead. An array pattern over a fixed array whose length is
+  a length parameter is not supported either (`type/match_type`); test `len(a)` instead. A type
+  alias of `str` names the element the same way as `str`.
+  Indexing produces a borrowed `str` that may be passed to a borrowed string parameter.
+  Each element occupies 16 bytes (pointer and byte length), so a concrete array can hold up to
+  4096 elements under the 65536-byte limit. A zero-length array is written `[""; 0]`.
+  The verifier checks each generic function once with a symbolic integer length constrained by
+  zero and the array size limit. Calls substitute the actual length in the contract and result
+  type. Each string array cell is a buffer with the usual byte-length, byte-range and UTF-8 facts
+  on an in-bounds read, quantified over the bound variables when the read is under a `forall`.
+  Literal cells hold their exact UTF-8 bytes. Indexing still requires a
+  proof of `0 <= i < len(a)`, including when zero is a possible length.
+  Both backends specialize code by the concrete length and any ordinary type arguments. Arrays
+  of string descriptors use Rust `[&'static str; N]` or LLVM `[N x { ptr, i64 }]`, with static
+  literal storage and by-value descriptor copies.
+  Tests: [accept](tests/spec/r6t_5_accept.pruv),
+  [index rejection](tests/spec/r6t_5_reject_index.pruv),
+  [runtime](tests/runtime/g4_lg25_const_fields/root.pruv).
+
 - R-6u-1 **Tuple patterns in arms.** A match arm binds a tuple payload by components: `Some((a, b))`, `Ok((a, _))`,
   `E::V((x, (y, _)))`, and a top-level `match t { (a, b) => { .. } }` over a tuple value (one arm, the whole
   product). `E::V((a, b))` reads one tuple field; `E::V(a, b)` reads two fields. Each binder equals its component
@@ -4205,8 +4241,8 @@ not in it. Tests: [tests/spec/r8_1_ok.pruv](tests/spec/r8_1_ok.pruv),
 | `type/eq_type` | type | `==` or `!=` on a type that does not support whole-value equality |
 | `type/field_type` | type | a field type that is not allowed (unit, an array in a generic type, ...) |
 | `type/field_name` | type | a field name does not start with a lower-case letter |
-| `type/fixed_array_element` | type | a fixed-length array element that is not a scalar integer, `char` or `bool` (R-6t-4) |
-| `type/fixed_array_length` | type | a negative fixed-length array length, or an array larger than 65536 bytes (R-6t-4) |
+| `type/fixed_array_element` | type | an unsupported fixed-length array element or a nonliteral element of a fixed `str` array (R-6t-4, R-6t-5) |
+| `type/fixed_array_length` | type | a negative or conflicting fixed-array length, or an array larger than 65536 bytes (R-6t-4, R-6t-5) |
 | `type/fixed_array_operation` | type | `==`/`!=` on fixed-length arrays, a fixed-length array used as a view `[T]` outside a call-duration lend, a literal or call as a `[T; N]` field of a constructor inside a contract (R-6t-4) |
 | `type/fixed_array_position` | type | `[T; N]` as a field of a generic struct or enum, tuple component, type argument other than the direct payload of `Option`, or nested array, or in the signature (struct fields included) of a host entry (non-generic root `pub` function, not `pred` or `impl`) or `trusted rust fn` (R-6t-4) |
 | `type/for_enumerate` | type | `for (i, x) in` over an array, view or `Vec`; enumeration is bundle P15 (R-6q-3) |

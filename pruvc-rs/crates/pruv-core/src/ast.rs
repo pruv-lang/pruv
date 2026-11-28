@@ -10,6 +10,7 @@ pub const ARRAY_LIST: &str = "@array";
 pub const METHOD_CALL: &str = "@method|";
 /// P7-1: `[x; N]` is a `Call` named `@repeat:<N>` with the one argument `x`.
 pub const ARRAY_REPEAT: &str = "@repeat:";
+pub const SYMBOLIC_REPEAT: &str = "@repeat:param";
 
 /// P7-1: the length of a `[x; N]` literal call name.
 pub fn array_repeat_len(name: &str) -> Option<u64> {
@@ -18,7 +19,7 @@ pub fn array_repeat_len(name: &str) -> Option<u64> {
 
 /// P7-1: a fixed-length array literal (`[a, b]` or `[x; N]`, both parsed as a reserved `Call`).
 pub fn is_array_lit(name: &str) -> bool {
-    name == ARRAY_LIST || array_repeat_len(name).is_some()
+    name == ARRAY_LIST || name == SYMBOLIC_REPEAT || array_repeat_len(name).is_some()
 }
 
 // ---------- G3: generics ----------
@@ -39,6 +40,8 @@ pub struct TParam {
     pub col: i64,
     pub name: String,
     pub bound: Option<String>,
+    /// Maximum value of a const parameter, tightened by the checker.
+    pub const_limit: Option<u64>,
 }
 
 /// The instantiation recorded by the checker on a generic Call / StructLit / EnumCtor / Ctor (Python `node.inst`).

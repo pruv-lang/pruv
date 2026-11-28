@@ -1,0 +1,2 @@
+fn count<const N: i64>(keys: [str; N]) -> i64 { return len(keys); }
+fn bad() -> i64 { return count::<2>(["a"]); }

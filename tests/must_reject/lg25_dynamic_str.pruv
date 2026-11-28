@@ -1,0 +1,1 @@
+fn bad(s: str) -> i64 { let a: [str; 1] = [s]; return len(a); }
